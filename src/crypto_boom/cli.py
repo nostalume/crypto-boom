@@ -644,11 +644,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     arguments = _parser().parse_args(argv)
     if arguments.command in ("scan", "model"):
-        from crypto_boom.market_scan import scan_market, scan_settings
+        from crypto_boom.config import project_settings
+        from crypto_boom.market_scan import scan_market
         from crypto_boom.model_runtime import activate_model
 
         try:
-            settings = scan_settings(arguments.config)
+            settings = project_settings(arguments.config)
             if arguments.command == "scan":
                 result = asyncio.run(scan_market(settings))
                 _emit_json(
@@ -664,7 +665,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
                 )
                 return 0 if result["status"] == "complete" else 2
-            registry = settings.data_dir / "models"
+            registry = settings.data_root / "models"
             if arguments.action == "activate":
                 if not arguments.model_id:
                     raise ValueError("model activate requires --id")

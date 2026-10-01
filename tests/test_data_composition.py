@@ -14,7 +14,6 @@ from crypto_boom.bars import (
 )
 from crypto_boom.config import project_settings
 from crypto_boom.market import Environment, InstrumentId, TimeWindow, VenueId
-from crypto_boom.market_scan import scan_settings
 from crypto_boom.storage.source import select_minute_partitions
 from test_forward_prediction import BASE, bars
 
@@ -30,7 +29,6 @@ def test_project_root_is_stable_from_nested_directory(tmp_path, monkeypatch):
     settings = project_settings()
     assert settings.data_root == tmp_path / "shared"
     assert settings.corpus_roots == (tmp_path / "shared/legacy/corpus",)
-    assert scan_settings().data_dir == settings.data_root
     assert project_settings(config) == settings
     config.write_text('[data]\nroot="shared"\n[scan]\ndata_dir="other"\n')
     with pytest.raises(ValueError, match="conflicting"):
@@ -212,3 +210,13 @@ def test_acquire_cli_passes_project_storage_independently_of_run(tmp_path, monke
     assert seen["data_root"] == tmp_path / "shared"
     assert seen["output"].is_relative_to(tmp_path / "shared/runs")
     assert seen["reuse_corpora"] == (tmp_path / "shared/old/corpus",)
+
+
+def test_retired_scan_config_is_refused_instead_of_changing_root(tmp_path, monkeypatch):
+    legacy = tmp_path / "scan.toml"
+    legacy.write_text('[scan]\ndata_dir="state"\n')
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="migrate"):
+        project_settings()
+    with pytest.raises(ValueError, match="configuration keys"):
+        project_settings(legacy)

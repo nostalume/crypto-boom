@@ -16,7 +16,8 @@ uv run --extra prediction python -m crypto_boom.research.hourly_cli publish --mo
 uv run --extra prediction crypto-boom scan
 ```
 
-已有旧 `hourly-upside-v1` 导出模型可直接执行 publish，省略 export。
+已有研究导出可直接执行 publish，省略 export。本机导出已迁至统一数据根的
+`runs/selected-hourly-export`；部署仅从 `models/` 加载已激活模型，不依赖此研究路径。
 发布默认使用项目配置 data.root 下的 models；`--registry` 是研究操作的显式覆盖。发布返回内容 ID；可不加 --activate，
 之后使用公共 `model activate --id ID --trust-model` 选择模型。迁移不重新拟合权重。
 模型与研究数据不随 Git 提供；joblib 能执行代码，只允许使用自己可信的产物。

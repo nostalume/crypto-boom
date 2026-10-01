@@ -76,7 +76,7 @@ def project_settings(path: Path | None = None) -> ProjectSettings:
     """Read explicit config or discover crypto-boom.toml upwards; no I/O on import.
 
     Missing project config defaults to the nearest crypto-boom pyproject's data/.
-    Legacy scan.toml is accepted only when passed explicitly, never silently merged.
+    Only the project data/scan tables are admitted; no legacy scan.data_dir.
     """
     if path is None:
         for parent in (Path.cwd(), *Path.cwd().parents):
@@ -86,7 +86,7 @@ def project_settings(path: Path | None = None) -> ProjectSettings:
                 break
             if (parent / "scan.toml").is_file():
                 raise ValueError(
-                    "legacy scan.toml requires explicit --config or migration to crypto-boom.toml"
+                    "migrate scan.toml to crypto-boom.toml with [data].root"
                 )
             manifest = parent / "pyproject.toml"
             if manifest.is_file():
@@ -112,14 +112,12 @@ def project_settings(path: Path | None = None) -> ProjectSettings:
     data, scan = document.get("data", {}), document.get("scan", {})
     if not isinstance(data, dict) or not isinstance(scan, dict):
         raise ValueError("data and scan must be configuration tables")
-    legacy = "data_dir" in scan
-    if (
-        set(data) - {"root", "legacy_corpora"}
-        or set(scan) - {"workers", "timeout_seconds", "data_dir"}
-        or (legacy and "data" in document)
-    ):
+    if set(data) - {"root", "legacy_corpora"} or set(scan) - {
+        "workers",
+        "timeout_seconds",
+    }:
         raise ValueError("unknown or conflicting project configuration keys")
-    raw_root = scan.get("data_dir", "data") if legacy else data.get("root", "data")
+    raw_root = data.get("root", "data")
     mounts = data.get("legacy_corpora", [])
     if (
         not isinstance(raw_root, str)

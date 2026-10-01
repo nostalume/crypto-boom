@@ -7,49 +7,25 @@ import csv
 import json
 import time
 from collections import Counter
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 import aiohttp
 
 from crypto_boom import _artifacts
 from crypto_boom.bars import MINUTE_US
+from crypto_boom.config import ProjectSettings
 from crypto_boom.market_data import ScanStopped, SpotSnapshotClient
 from crypto_boom.model_runtime import load_active_model, predict_bars
 
 
-@dataclass(frozen=True)
-class ScanSettings:
-    data_dir: Path = Path("data")
-    workers: int = 4
-    timeout_seconds: int = 900
-
-    def __post_init__(self) -> None:
-        if type(self.workers) is not int or not 1 <= self.workers <= 4:
-            raise ValueError("workers must be 1..4")
-        if (
-            type(self.timeout_seconds) is not int
-            or not 1 <= self.timeout_seconds <= 900
-        ):
-            raise ValueError("timeout_seconds must be 1..900")
-
-
-def scan_settings(path: Path | None = None) -> ScanSettings:
-    from crypto_boom.config import project_settings
-
-    project = project_settings(path)
-    return ScanSettings(project.data_root, project.workers, project.timeout_seconds)
-
-
-async def scan_market(settings: ScanSettings) -> dict:
+async def scan_market(settings: ProjectSettings) -> dict:
     """No caller symbol list or model path: resolve activation, enumerate full scope."""
-    models, manifest, recipe = load_active_model(settings.data_dir / "models")
+    models, manifest, recipe = load_active_model(settings.data_root / "models")
     identity = manifest["identity"]
     step_us = identity["decision_step_minutes"] * MINUTE_US
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S") + "-" + uuid4().hex[:8]
-    output = settings.data_dir / "reports" / run_id
+    output = settings.data_root / "reports" / run_id
     results: dict[str, dict] = {}
     async with aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=12)
@@ -83,7 +59,7 @@ async def scan_market(settings: ScanSettings) -> dict:
                         symbol,
                         decision_us=decision,
                         history_minutes=recipe.history_minutes,
-                        cache=settings.data_dir / "snapshots",
+                        cache=settings.data_root / "snapshots",
                     )
                     values = predict_bars(models, manifest, bars, decision_us=decision)
                     results[symbol] = {

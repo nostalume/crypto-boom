@@ -21,7 +21,7 @@
 | 数据清理/准入 | `bars.decode_minute_page/admit_bars` | 统一分钟表、排序、价格/成交/时间校验；拒绝而非猜测修复 |
 | 公共特征 | `features.past_sequence/SequenceRecipe/sequence_matrix` | 只看过去；由配方给出历史、聚合及窗口；不含特定模型名 |
 | 模型运行 | `model_runtime.publish_model/activate_model/load_active_model/predict_bars` | 内容寻址、显式信任、兼容检查、配方和输出语义绑定 |
-| 扫描/报告 | `market_scan.ScanSettings/scan_market` | 全部成员、共同起点、成功/失败台账、原子发布 |
+| 扫描/报告 | `config.ProjectSettings`、`market_scan.scan_market` | 全部成员、共同起点、成功/失败台账、原子发布 |
 | 研究 | `research/*` 和保留的实验 CLI | 训练、比较、选型、导出、特定模型回放，不是公共部署契约 |
 
 不是任意模型插件系统。当前 `numeric-sequence-v1` 支持 1—8 个数值输出和有限历史
@@ -34,9 +34,9 @@
 `crypto-boom.toml`，以 `[data].root` 指定唯一数据根；相对路径按配置文件位置解析。
 扫描参数仍是 `[scan].workers`、`timeout_seconds`。命令可用 `--config FILE` 显式选择，
 否则向上查找项目配置；没有配置时仅在识别出的本项目根使用 `data/`，不按子目录另建数据根。
-旧 `scan.toml` 只在显式 `--config` 时兼容，不与新配置合并。下文 data_dir 均指统一 data.root。
+旧 `[scan].data_dir` 已移除，请改为 `[data].root`；只保留一套项目配置。
 
-`data_dir/models/<内容ID>/` 保存不可变 manifest 和权重；`active.json` 是本地选择：
+`data.root/models/<内容ID>/` 保存不可变 manifest 和权重；`active.json` 是本地选择：
 
 ```sh
 uv run --extra prediction crypto-boom model list
@@ -65,7 +65,7 @@ HTTP 418/429 停止继续获取，不重试其他域名。参见
 
 ## 报告与退出码
 
-每次新建 `data_dir/reports/<UTC时间-运行ID>/`：
+每次新建 `data.root/reports/<UTC时间-运行ID>/`：
 
 - `report.md`：可读摘要、排序前30预览、范围、时效和风险边界。
 - `report.json`：完整模型契约、所有成员状态、源哈希、缓存身份和预测数值。

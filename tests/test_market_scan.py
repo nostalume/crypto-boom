@@ -12,9 +12,10 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from threadpoolctl import threadpool_limits
 
 from crypto_boom.bars import MINUTE_US
+from crypto_boom.config import ProjectSettings, project_settings
 from crypto_boom.features import SequenceRecipe, sequence_matrix
 from crypto_boom.market_data import ScanStopped, SpotSnapshotClient
-from crypto_boom.market_scan import ScanSettings, scan_market, scan_settings
+from crypto_boom.market_scan import scan_market
 from crypto_boom.model_runtime import (
     activate_model,
     load_active_model,
@@ -119,7 +120,7 @@ def test_full_scope_common_clock_and_partial_ledger(tmp_path, monkeypatch, mode)
 
     monkeypatch.setattr(SpotSnapshotClient, "universe", universe)
     monkeypatch.setattr(SpotSnapshotClient, "bars", fetch)
-    result = asyncio.run(scan_market(ScanSettings(tmp_path, workers=1)))
+    result = asyncio.run(scan_market(ProjectSettings(tmp_path, workers=1)))
     assert result["eligible_symbols"] == 3 and len(result["rows"]) == 3
     assert set(decisions) == {BASE + 1500 * MINUTE_US}
     assert (result["status"] == "complete") == (mode == "complete")
@@ -139,15 +140,15 @@ def test_full_scope_common_clock_and_partial_ledger(tmp_path, monkeypatch, mode)
 
 def test_no_active_model_and_strict_config(tmp_path):
     with pytest.raises(ValueError, match="no active"):
-        asyncio.run(scan_market(ScanSettings(tmp_path)))
+        asyncio.run(scan_market(ProjectSettings(tmp_path)))
     with pytest.raises(ValueError, match="does not exist"):
-        scan_settings(tmp_path / "missing.toml")
-    path = tmp_path / "scan.toml"
-    path.write_text('[scan]\ndata_dir="state"\nworkers=2\n')
-    assert scan_settings(path).data_dir == tmp_path / "state"
+        project_settings(tmp_path / "missing.toml")
+    path = tmp_path / "crypto-boom.toml"
+    path.write_text('[data]\nroot="state"\n[scan]\nworkers=2\n')
+    assert project_settings(path).data_root == tmp_path / "state"
     path.write_text('[scan]\nsymbol="AAAUSDT"\n')
     with pytest.raises(ValueError, match="unknown"):
-        scan_settings(path)
+        project_settings(path)
 
 
 def test_snapshot_cache_exact_identity_and_missing_data(tmp_path, monkeypatch):

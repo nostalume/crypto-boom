@@ -1,4 +1,0 @@
-[scan]
-data_dir = "data"
-workers = 4
-timeout_seconds = 900
