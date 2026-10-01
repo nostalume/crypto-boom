@@ -10,7 +10,7 @@
 | Shared causal features | `features.iter_feature_segments` | Past-only features, separate contiguous quality segments |
 | Research model runtime | `research.forward` | `ForecastGrid`, feature eligibility, artifact load/save, `forecast` |
 | Research development | `research.forward_training` | `training_rows`, `fit_forward`, `backtest`, shared `evaluate_rows` |
-| Process adapter | `predict_cli` | Explicit train/backtest/latest commands, stdout/stderr and text/JSON |
+| Research process adapter | `research.predict_cli` | Explicit train/backtest/latest commands, stdout/stderr and text/JSON |
 
 Shared components do not import research modules. Prediction does not import
 `forward_training`. The historical `research.acquisition` script remains a
@@ -49,7 +49,7 @@ uv run crypto-boom-predict latest --symbol SOLUSDT \
 ```
 
 Examples use shell backslash continuation; on PowerShell use a single line or
-backticks. `python -m crypto_boom.predict_cli` exposes the same commands. Training
+backticks. `python -m crypto_boom.research.predict_cli` exposes the same commands. Training
 and backtest print JSON. Latest defaults to Chinese text. Expected input/I/O
 failures print a JSON refusal to stderr and return 2. Use a UTF-8 Windows terminal.
 

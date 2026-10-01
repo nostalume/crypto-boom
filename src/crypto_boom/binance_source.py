@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from time import monotonic, monotonic_ns, time_ns
@@ -386,3 +387,20 @@ def _decimal(value: str) -> Decimal:
     if not isinstance(value, str):
         raise LiveSchemaError("wire decimal must be encoded as text")
     return Decimal(value)
+
+
+def select_spot_usdt_universe(
+    metadata: Iterable[InstrumentMetadata],
+) -> tuple[str, ...]:
+    """Select observed, trading USDT Spot instruments in stable symbol order."""
+
+    return tuple(
+        sorted(
+            event.instrument.symbol
+            for event in metadata
+            if event.status is InstrumentStatus.TRADING
+            and event.quote_asset == "USDT"
+            and "SPOT" in event.permissions
+            and event.observation is MetadataObservation.OBSERVED
+        )
+    )

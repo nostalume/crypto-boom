@@ -54,11 +54,8 @@ from crypto_boom.live import (
 from crypto_boom.market import (
     AggregateTradeEvent,
     BookTickerEvent,
-    InstrumentMetadata,
-    InstrumentStatus,
     KlineEvent,
     MarketEvidence,
-    MetadataObservation,
 )
 
 QUALIFICATION_SCHEMA_VERSION: Final = 3
@@ -1314,23 +1311,6 @@ class QualificationRolloverController:
 
     def abort(self) -> None:
         self.sink.abort()
-
-
-def select_spot_usdt_universe(
-    metadata: Iterable[InstrumentMetadata],
-) -> tuple[str, ...]:
-    """Select observed, trading USDT Spot instruments in stable symbol order."""
-
-    return tuple(
-        sorted(
-            event.instrument.symbol
-            for event in metadata
-            if event.status is InstrumentStatus.TRADING
-            and event.quote_asset == "USDT"
-            and "SPOT" in event.permissions
-            and event.observation is MetadataObservation.OBSERVED
-        )
-    )
 
 
 def campaign_facts_for_day(

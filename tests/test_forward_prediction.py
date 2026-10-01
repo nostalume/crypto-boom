@@ -11,7 +11,6 @@ import pytest
 
 from crypto_boom import latest_market
 from crypto_boom.bars import MINUTE_US, admit_bars, load_bar_files
-from crypto_boom.predict_cli import main
 from crypto_boom.research.forward import (
     FEATURES,
     HORIZONS,
@@ -24,6 +23,7 @@ from crypto_boom.research.forward import (
     save_model,
 )
 from crypto_boom.research.forward_training import backtest, fit_forward, training_rows
+from crypto_boom.research.predict_cli import main
 
 BASE = 1_735_689_600_000_000
 
@@ -408,9 +408,10 @@ def test_framework_and_deployment_do_not_import_research_fitting(tmp_path):
     code = f"""
 import sys
 sys.path.insert(0, {src!r})
-import crypto_boom.bars, crypto_boom.features, crypto_boom.latest_market
+import crypto_boom.bars, crypto_boom.features, crypto_boom.latest_market, crypto_boom.market_data
+assert "crypto_boom.qualification" not in sys.modules
 assert not any(k.startswith(('crypto_boom.research', 'sklearn')) for k in sys.modules)
-import crypto_boom.research.forward, crypto_boom.predict_cli
+import crypto_boom.research.forward, crypto_boom.research.predict_cli
 assert 'crypto_boom.research.forward_training' not in sys.modules
 assert 'tsfel' not in sys.modules and 'interpret' not in sys.modules
 """
@@ -421,3 +422,35 @@ assert 'tsfel' not in sys.modules and 'interpret' not in sys.modules
         capture_output=True,
         text=True,
     )
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_window_loading_preserves_file_order_duplicates_and_receipts(tmp_path, reverse):
+    source = bars(30)
+    pieces = [source.slice(10, 15), source.slice(0, 20)]
+    if reverse:
+        pieces.reverse()
+    paths = [tmp_path / f"{i}.parquet" for i in range(2)]
+    for piece, path in zip(pieces, paths, strict=True):
+        piece.write_parquet(path, row_group_size=5)
+    start, end = BASE + 5 * MINUTE_US, BASE + 23 * MINUTE_US
+    result, receipts = load_bar_files(paths, start_us=start, end_us=end)
+    expected = pl.concat(pieces).filter(
+        (pl.col("open_time").dt.epoch("us") >= start)
+        & (pl.col("open_time").dt.epoch("us") + MINUTE_US < end)
+    )
+    assert result.equals(expected)
+    assert len(receipts) == 2 and [r["name"] for r in receipts] == [
+        p.name for p in paths
+    ]
+    with pytest.raises(ValueError, match="duplicate"):
+        admit_bars(result)
+
+
+def test_window_loading_checks_schema_even_outside_requested_window(tmp_path):
+    path = tmp_path / "wrong-time.parquet"
+    bars(30).with_columns(pl.col("open_time").dt.replace_time_zone(None)).write_parquet(
+        path
+    )
+    with pytest.raises(ValueError, match="UTC"):
+        load_bar_files([path], start_us=0, end_us=MINUTE_US)

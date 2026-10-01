@@ -38,8 +38,8 @@ research = [
 
 [project.scripts]
 crypto-boom = "crypto_boom.cli:main"
-crypto-boom-predict = "crypto_boom.predict_cli:main"
-crypto-boom-study = "crypto_boom.study_cli:main"
+crypto-boom-predict = "crypto_boom.research.predict_cli:main"
+crypto-boom-study = "crypto_boom.research.study_cli:main"
 
 [dependency-groups]
 dev = [

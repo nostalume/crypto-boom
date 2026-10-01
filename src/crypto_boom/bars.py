@@ -92,15 +92,23 @@ def load_bar_files(
     for path in paths:
         with path.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
-        frames.append(pl.read_parquet(path, columns=list(SOURCE_COLUMNS)))
+        frame = pl.scan_parquet(path).select(SOURCE_COLUMNS)
+        if frame.collect_schema()["open_time"] != pl.Datetime("us", "UTC"):
+            raise ValueError("open_time must be datetime[us, UTC]")
+        frames.append(frame)
         receipts.append({"name": path.name, "sha256": digest})
-    bars = pl.concat(frames)
-    if bars["open_time"].dtype != pl.Datetime("us", "UTC"):
-        raise ValueError("open_time must be datetime[us, UTC]")
-    # UTC timestamps and schema are admitted before slicing, not silently cast.
-    bars = bars.filter(
-        (pl.col("open_time").dt.epoch("us") >= start_us)
-        & (pl.col("open_time").dt.epoch("us") + MINUTE_US < end_us)
+    # Preserve file/row order and duplicates, but materialize only the requested
+    # window. Native timestamp predicates allow Parquet row-group pruning.
+    bars = (
+        pl.concat(frames)
+        .filter(
+            (pl.col("open_time") >= pl.lit(start_us).cast(pl.Datetime("us", "UTC")))
+            & (
+                pl.col("open_time")
+                < pl.lit(end_us - MINUTE_US).cast(pl.Datetime("us", "UTC"))
+            )
+        )
+        .collect()
     )
     if bars.is_empty():
         raise ValueError("no bars in observation window")

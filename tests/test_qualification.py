@@ -23,6 +23,7 @@ from crypto_boom.binance_source import (
     MetadataCapture,
     RestWeightBudget,
     decode_exchange_info,
+    select_spot_usdt_universe,
 )
 from crypto_boom.live import (
     BoundedCaptureQueue,
@@ -42,7 +43,6 @@ from crypto_boom.qualification import (
     QualificationLimits,
     QualificationPublicationError,
     publish_qualification_campaign,
-    select_spot_usdt_universe,
 )
 
 RUN_ID = UUID("8386f2c3-b925-40ce-8c6d-4785ea0f37ce")

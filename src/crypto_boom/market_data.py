@@ -19,8 +19,8 @@ from crypto_boom.binance_source import (
     RestWeightBudget,
     decode_exchange_info,
     sampled_receipt,
+    select_spot_usdt_universe,
 )
-from crypto_boom.qualification import select_spot_usdt_universe
 
 
 class ScanStopped(RuntimeError):

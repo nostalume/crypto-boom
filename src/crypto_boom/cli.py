@@ -22,6 +22,7 @@ from crypto_boom.binance_source import (
     RestWeightBudget,
     fetch_exchange_info,
     measure_exchange_clock,
+    select_spot_usdt_universe,
 )
 from crypto_boom.config import ConfigAdmissionError, admit_run_config
 from crypto_boom.history.availability import (
@@ -67,7 +68,6 @@ from crypto_boom.qualification import (
     RollingCrossDayQualityPublisher,
     run_continuous_qualification_campaign,
     run_qualification_campaign,
-    select_spot_usdt_universe,
 )
 from crypto_boom.storage.source import (
     ResearchCorpusLimits,

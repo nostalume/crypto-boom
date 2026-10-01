@@ -63,9 +63,6 @@ MARKET_FEATURES = (
     "peer_positive_fraction_15",
     "peer_dispersion_15",
 )
-ALL_FEATURES = (
-    PRICE_FEATURES + FLOW_FEATURES + PATH_FEATURES + DYNAMICS_FEATURES + MARKET_FEATURES
-)
 
 SEQUENCE_CHANNELS = (
     "bucket_return",
@@ -355,20 +352,6 @@ def iter_feature_segments(
         if rich:
             frame = _enrich_path_and_activity(frame)
         yield frame
-
-
-def select_feature_decisions(
-    frame: pl.DataFrame, *, rich: bool = False
-) -> pl.DataFrame:
-    """Five-minute decisions after warm-up and trailing-liquidity admission."""
-    required = PRICE_FEATURES + FLOW_FEATURES
-    if rich:
-        required += PATH_FEATURES + DYNAMICS_FEATURES
-    return frame.filter(
-        (pl.col("decision_us") % (5 * MINUTE_US) == 0)
-        & (pl.col("turnover_1440") >= 1_000_000)
-        & pl.all_horizontal(pl.col(*required).is_finite())
-    )
 
 
 def _enrich_path_and_activity(frame: pl.DataFrame) -> pl.DataFrame:
