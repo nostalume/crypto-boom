@@ -34,3 +34,6 @@ Thumbs.db
 
 # Local scan configuration (copy scan.example.toml)
 /scan.toml
+
+# Local project configuration
+/crypto-boom.toml

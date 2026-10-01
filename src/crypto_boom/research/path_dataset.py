@@ -25,6 +25,7 @@ def build_path_dataset(
     spec: PathTargetSpec = DEFAULT_TARGETS,
     step_minutes: int = 5,
     minimum_turnover: float = 1_000_000,
+    data_root: Path | None = None,
 ) -> dict:
     """Build all available symbols; unavailable members remain in the pool ledger."""
     pool = load_sample_pool(pool_path)
@@ -37,12 +38,22 @@ def build_path_dataset(
         ]
         feature_path, feature_reused = build_feature_cache(
             paths,
-            output_root=output_root / "features",
+            output_root=(
+                data_root / "derived/features"
+                if data_root is not None
+                else output_root / "features"
+            ),
             step_minutes=step_minutes,
             minimum_turnover=minimum_turnover,
         )
         target_path, target_reused = build_target_cache(
-            feature_path, output_root=output_root / "targets", spec=spec
+            feature_path,
+            output_root=(
+                data_root / "derived/targets"
+                if data_root is not None
+                else output_root / "targets"
+            ),
+            spec=spec,
         )
         _, feature = read_feature_cache(feature_path)
         _, target = read_target_cache(target_path)
@@ -73,6 +84,7 @@ def build_path_dataset(
         "pool": str(pool_path.resolve()),
         "batches": batches,
     }
+    output_root.mkdir(parents=True, exist_ok=True)
     destination = output_root / (dataset_id.removeprefix("sha256:") + ".json")
     if not destination.exists():
         _artifacts.write_exclusive_bytes(destination, _artifacts.canonical_json(result))

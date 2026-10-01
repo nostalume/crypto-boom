@@ -1,0 +1,7 @@
+[data]
+root = "data"
+legacy_corpora = []
+
+[scan]
+workers = 4
+timeout_seconds = 900

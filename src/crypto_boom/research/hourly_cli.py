@@ -28,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--trust-model", action="store_true")
     publish = commands.add_parser("publish")
     publish.add_argument("--model", type=Path, required=True)
-    publish.add_argument("--registry", type=Path, default=Path("data/models"))
+    publish.add_argument("--registry", type=Path)
+    publish.add_argument("--config", type=Path)
     publish.add_argument("--trust-model", action="store_true")
     publish.add_argument("--activate", action="store_true")
     args = parser.parse_args(argv)
@@ -66,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         from crypto_boom.model_runtime import activate_model, publish_model
 
+        if args.registry is None:
+            from crypto_boom.config import project_settings
+
+            args.registry = project_settings(args.config).data_root / "models"
         model, metadata = load_hourly_model(args.model, trusted=args.trust_model)
         result = publish_model(
             args.registry,

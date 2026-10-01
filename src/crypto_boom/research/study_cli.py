@@ -7,6 +7,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 
 def _utc_us(value: str) -> int:
@@ -24,7 +25,8 @@ def main(argv: list[str] | None = None) -> int:
     acquire = commands.add_parser("acquire")
     acquire.add_argument("--start-month", required=True)
     acquire.add_argument("--end-month", required=True)
-    acquire.add_argument("--output", required=True, type=Path)
+    acquire.add_argument("--output", type=Path)
+    acquire.add_argument("--config", type=Path)
     acquire.add_argument("--count", type=int, default=24)
     acquire.add_argument("--seed", default="forward-path-v1")
     acquire.add_argument("--reuse-corpus", type=Path, action="append", default=[])
@@ -37,7 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     build = commands.add_parser("build")
     build.add_argument("--pool", required=True, type=Path)
-    build.add_argument("--output", required=True, type=Path)
+    build.add_argument("--output", type=Path)
+    build.add_argument("--config", type=Path)
     build.add_argument("--step-minutes", type=int, default=5)
     build.add_argument("--minimum-turnover", type=float, default=1_000_000)
     build.add_argument("--horizons", type=int, nargs="+", default=[120, 360])
@@ -86,6 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     latest.add_argument("--trust-model", action="store_true")
     latest.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
+    if args.command in ("acquire", "build"):
+        from crypto_boom.config import project_settings
+
+        project = project_settings(args.config)
+        if args.output is None:
+            args.output = project.data_root / "runs" / f"{args.command}-{uuid4().hex}"
     if args.command == "acquire":
         from crypto_boom.history.availability import MonthlyAvailabilityRequest
         from crypto_boom.sample_pool import acquire_sample_pool
@@ -99,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
                 output=args.output,
                 count=args.count,
                 seed=args.seed,
-                reuse_corpora=tuple(args.reuse_corpus),
+                reuse_corpora=(*project.corpus_roots, *args.reuse_corpus),
+                data_root=project.data_root,
                 excluded_symbols=tuple(args.exclude_symbol),
                 quarantined_partitions=tuple(
                     tuple(s.split(":", 2)) for s in args.quarantine
@@ -140,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             spec=PathTargetSpec(tuple(args.horizons), tuple(args.amplitudes)),
             step_minutes=args.step_minutes,
             minimum_turnover=args.minimum_turnover,
+            data_root=project.data_root,
         )
     elif args.command == "screen":
         from crypto_boom.feature_batch import read_feature_cache

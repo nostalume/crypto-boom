@@ -81,6 +81,7 @@ async def acquire_sample_pool(
     count: int = 24,
     seed: str = "forward-path-v1",
     reuse_corpora: tuple[Path, ...] = (),
+    data_root: Path | None = None,
     excluded_symbols: tuple[str, ...] = (),
     maximum_download_bytes: int = 1_073_741_824,
     quarantined_partitions: tuple[tuple[str, str, str], ...] = (),
@@ -177,7 +178,15 @@ async def acquire_sample_pool(
         raise ValueError(
             "quarantine requires unique available partitions and explicit reasons"
         )
-    roots = (*reuse_corpora, output / "corpus")
+    corpus = (
+        data_root / "canonical/archives" if data_root is not None else output / "corpus"
+    )
+    monthly = data_root / "raw/monthly" if data_root is not None else output / "monthly"
+    roots = (
+        (corpus, *reuse_corpora, output / "corpus")
+        if data_root is not None
+        else (*reuse_corpora, corpus)
+    )
     partitions: dict[tuple[str, str], Path] = {}
     missing = []
     for probe in report.probes:
@@ -206,7 +215,7 @@ async def acquire_sample_pool(
         missing_report = replace(report, probes=tuple(missing))
         await acquire_monthly_archives(
             missing_report,
-            output_root=output / "monthly",
+            output_root=monthly,
             ingestion_run_id=uuid4(),
             limits=MonthlyArchiveLimits(
                 maximum_archives=512,
@@ -218,8 +227,8 @@ async def acquire_sample_pool(
         )
         materialized = materialize_research_corpus(
             missing_report,
-            monthly_root=output / "monthly",
-            output_root=output / "corpus",
+            monthly_root=monthly,
+            output_root=corpus,
             limits=ResearchCorpusLimits(
                 maximum_archives=512, maximum_elapsed_seconds=900
             ),

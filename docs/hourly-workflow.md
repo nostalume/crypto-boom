@@ -12,12 +12,12 @@
 ```sh
 uv sync --extra prediction
 uv run --extra prediction python -m crypto_boom.research.hourly_cli export-hourly --study PATH_TO_SCALE_STUDY --model data/research-export --trust-model
-uv run --extra prediction python -m crypto_boom.research.hourly_cli publish --model data/research-export --registry data/models --trust-model --activate
+uv run --extra prediction python -m crypto_boom.research.hourly_cli publish --model data/research-export --trust-model --activate
 uv run --extra prediction crypto-boom scan
 ```
 
 已有旧 `hourly-upside-v1` 导出模型可直接执行 publish，省略 export。
-`--registry` 应对应公共配置 data_dir 下的 models。发布返回内容 ID；可不加 --activate，
+发布默认使用项目配置 data.root 下的 models；`--registry` 是研究操作的显式覆盖。发布返回内容 ID；可不加 --activate，
 之后使用公共 `model activate --id ID --trust-model` 选择模型。迁移不重新拟合权重。
 模型与研究数据不随 Git 提供；joblib 能执行代码，只允许使用自己可信的产物。
 

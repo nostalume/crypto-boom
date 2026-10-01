@@ -6,6 +6,7 @@ import hashlib
 import json
 import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 
@@ -49,4 +50,89 @@ def admit_run_config(document: str) -> AdmittedRunConfig:
     return AdmittedRunConfig(
         schema_version=1,
         config_id=f"sha256:{digest}",
+    )
+
+
+@dataclass(frozen=True)
+class ProjectSettings:
+    """Project location, not the caller's working directory, owns persisted data."""
+
+    data_root: Path
+    corpus_roots: tuple[Path, ...] = ()
+    workers: int = 4
+    timeout_seconds: int = 900
+
+    def __post_init__(self) -> None:
+        if type(self.workers) is not int or not 1 <= self.workers <= 4:
+            raise ValueError("workers must be 1..4")
+        if (
+            type(self.timeout_seconds) is not int
+            or not 1 <= self.timeout_seconds <= 900
+        ):
+            raise ValueError("timeout_seconds must be 1..900")
+
+
+def project_settings(path: Path | None = None) -> ProjectSettings:
+    """Read explicit config or discover crypto-boom.toml upwards; no I/O on import.
+
+    Missing project config defaults to the nearest crypto-boom pyproject's data/.
+    Legacy scan.toml is accepted only when passed explicitly, never silently merged.
+    """
+    if path is None:
+        for parent in (Path.cwd(), *Path.cwd().parents):
+            candidate = parent / "crypto-boom.toml"
+            if candidate.is_file():
+                path = candidate
+                break
+            if (parent / "scan.toml").is_file():
+                raise ValueError(
+                    "legacy scan.toml requires explicit --config or migration to crypto-boom.toml"
+                )
+            manifest = parent / "pyproject.toml"
+            if manifest.is_file():
+                name = (
+                    tomllib.loads(manifest.read_text(encoding="utf-8"))
+                    .get("project", {})
+                    .get("name")
+                )
+                if name != "crypto-boom":
+                    raise ValueError(
+                        "different project boundary; pass explicit --config"
+                    )
+                return ProjectSettings((parent / "data").resolve())
+        if path is None:
+            raise ValueError("no project configuration; pass --config crypto-boom.toml")
+    if not path.is_file():
+        raise ValueError("explicit project configuration does not exist")
+    if path.stat().st_size > 64_000:
+        raise ValueError("project configuration exceeds size limit")
+    document = tomllib.loads(path.read_text(encoding="utf-8"))
+    if set(document) - {"data", "scan"}:
+        raise ValueError("unknown project configuration keys")
+    data, scan = document.get("data", {}), document.get("scan", {})
+    if not isinstance(data, dict) or not isinstance(scan, dict):
+        raise ValueError("data and scan must be configuration tables")
+    legacy = "data_dir" in scan
+    if (
+        set(data) - {"root", "legacy_corpora"}
+        or set(scan) - {"workers", "timeout_seconds", "data_dir"}
+        or (legacy and "data" in document)
+    ):
+        raise ValueError("unknown or conflicting project configuration keys")
+    raw_root = scan.get("data_dir", "data") if legacy else data.get("root", "data")
+    mounts = data.get("legacy_corpora", [])
+    if (
+        not isinstance(raw_root, str)
+        or not raw_root.strip()
+        or not isinstance(mounts, list)
+        or len(mounts) > 32
+        or any(not isinstance(p, str) or not p.strip() for p in mounts)
+    ):
+        raise ValueError("invalid data root or legacy corpus locations")
+    root = (path.resolve().parent / raw_root).resolve()
+    return ProjectSettings(
+        root,
+        tuple((root / p).resolve() for p in mounts),
+        scan.get("workers", 4),
+        scan.get("timeout_seconds", 900),
     )

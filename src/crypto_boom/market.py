@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
@@ -609,3 +610,34 @@ def _require_pattern(value: object, pattern: re.Pattern[str], name: str) -> str:
     if not isinstance(value, str) or pattern.fullmatch(value) is None:
         raise EvidenceAdmissionError(f"{name} is invalid")
     return value
+
+
+@dataclass(frozen=True)
+class TimeWindow:
+    """UTC microsecond event-time interval [start, end); not a data reader."""
+
+    start_us: int
+    end_us: int
+
+    def __post_init__(self) -> None:
+        if (
+            any(
+                type(t) is not int or not -(2**63) <= t < 2**63
+                for t in (self.start_us, self.end_us)
+            )
+            or self.start_us >= self.end_us
+        ):
+            raise ValueError("require representable UTC start < end")
+
+    @classmethod
+    def from_datetimes(cls, start: datetime, end: datetime) -> TimeWindow:
+        if any(t.tzinfo is None or t.utcoffset() is None for t in (start, end)):
+            raise ValueError("timestamps must have explicit timezones")
+        epoch = datetime(1970, 1, 1, tzinfo=UTC)
+        values = []
+        for t in (start, end):
+            delta = t.astimezone(UTC) - epoch
+            values.append(
+                (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+            )
+        return cls(*values)

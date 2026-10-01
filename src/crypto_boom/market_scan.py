@@ -6,7 +6,6 @@ import asyncio
 import csv
 import json
 import time
-import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,27 +37,10 @@ class ScanSettings:
 
 
 def scan_settings(path: Path | None = None) -> ScanSettings:
-    if path is not None and not path.is_file():
-        raise ValueError("explicit scan configuration does not exist")
-    path = path or Path("scan.toml")
-    if not path.exists():
-        return ScanSettings()
-    if path.stat().st_size > 64_000:
-        raise ValueError("scan configuration exceeds size limit")
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
-    if set(data) != {"scan"} or set(data["scan"]) - {
-        "data_dir",
-        "workers",
-        "timeout_seconds",
-    }:
-        raise ValueError("unknown scan configuration keys")
-    values = data["scan"]
-    directory = Path(values.get("data_dir", "data"))
-    if not directory.is_absolute():
-        directory = path.resolve().parent / directory
-    return ScanSettings(
-        directory, values.get("workers", 4), values.get("timeout_seconds", 900)
-    )
+    from crypto_boom.config import project_settings
+
+    project = project_settings(path)
+    return ScanSettings(project.data_root, project.workers, project.timeout_seconds)
 
 
 async def scan_market(settings: ScanSettings) -> dict:

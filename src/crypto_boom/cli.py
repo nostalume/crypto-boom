@@ -134,7 +134,9 @@ def _parser() -> argparse.ArgumentParser:
         help="scan the entire observed Spot USDT universe using the active model",
     )
     scan.add_argument(
-        "--config", type=Path, help="default scan.toml; no symbol/model-path arguments"
+        "--config",
+        type=Path,
+        help="project crypto-boom.toml; no symbol/model-path arguments",
     )
     models = subparsers.add_parser(
         "model", help="list or explicitly activate local model IDs"

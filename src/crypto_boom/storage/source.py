@@ -5,7 +5,7 @@ from __future__ import annotations
 import multiprocessing as mp
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from time import monotonic, sleep
 from typing import Final
@@ -25,7 +25,13 @@ from crypto_boom.history.monthly import (
     load_published_monthly_archive,
     load_published_monthly_klines_by_day,
 )
-from crypto_boom.market import KlineEvent
+from crypto_boom.market import (
+    Environment,
+    InstrumentId,
+    KlineEvent,
+    TimeWindow,
+    VenueId,
+)
 
 RESEARCH_STORAGE_VERSION: Final = "research-source-kline-parquet-v1"
 _SHA256_PREFIX = "sha256:"
@@ -779,4 +785,70 @@ def _is_digest(value: str) -> bool:
     digest = value.removeprefix(_SHA256_PREFIX)
     return len(digest) == 64 and all(
         character in "0123456789abcdef" for character in digest
+    )
+
+
+@dataclass(frozen=True)
+class MinutePartitionSelection:
+    partitions: tuple[PublishedResearchPartition, ...]
+    missing_months: tuple[str, ...]
+
+
+def select_minute_partitions(
+    corpora: tuple[Path, ...], instrument: InstrumentId, window: TimeWindow
+) -> MinutePartitionSelection:
+    """Locate native Binance Spot minute archives; no network or universal reader.
+
+    Mounts are explicit. Same manifest across mounts is reused; different revisions
+    for a month are ambiguous, never resolved by directory order or newest mtime.
+    Missing months remain explicit and do not establish historical listing status.
+    """
+    if (
+        instrument.venue != VenueId("binance", "spot")
+        or instrument.environment is not Environment.PRODUCTION
+    ):
+        raise ValueError(
+            "minute archive selector supports Binance Spot production only"
+        )
+    if not 1 <= len(corpora) <= 32:
+        raise ValueError("require 1..32 corpus roots")
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    first = (epoch + timedelta(microseconds=window.start_us)).date().replace(day=1)
+    last = (epoch + timedelta(microseconds=window.end_us - 1)).date().replace(day=1)
+    months = []
+    while first <= last:
+        if len(months) >= 240:
+            raise ValueError("partition selection exceeds 240 months")
+        months.append(first.strftime("%Y-%m"))
+        if first == last:
+            break
+        first = date(first.year + (first.month == 12), first.month % 12 + 1, 1)
+    selected = {}
+    files, total_bytes = 0, 0
+    for root in dict.fromkeys(p.resolve() for p in corpora):
+        base = root / "binance/spot/research-source-klines" / instrument.symbol / "1m"
+        for month in months:
+            for path in (base / month).glob("*/manifest.json"):
+                files += 1
+                total_bytes += (path.parent / "klines.parquet").stat().st_size
+                if files > 512 or total_bytes > 8 * 1024**3:
+                    raise ValueError("partition selection exceeds 512 files / 8 GiB")
+                part = load_published_research_partition(path.parent)
+                if (
+                    part.manifest.symbol != instrument.symbol
+                    or part.manifest.month != month
+                ):
+                    raise ValueError("partition path and metadata disagree")
+                if (
+                    month in selected
+                    and selected[month].manifest.manifest_id
+                    != part.manifest.manifest_id
+                ):
+                    raise ValueError(
+                        f"ambiguous archive revision for {instrument.symbol} {month}; pin one corpus/version"
+                    )
+                selected[month] = part
+    return MinutePartitionSelection(
+        tuple(selected[m] for m in months if m in selected),
+        tuple(m for m in months if m not in selected),
     )

@@ -30,10 +30,11 @@
 
 ## 配置和模型指派
 
-可复制 `scan.example.toml` 为 `scan.toml`；也可传 `scan --config FILE`。
-只配置 `data_dir`、`workers`（1—4）、`timeout_seconds`（1—900）。相对数据目录
-按配置文件目录解析；无配置时使用当前目录的 `data/`。显式不存在的配置会拒绝。
-未知键（包括 symbol）拒绝，避免误以为只扫描一个标的。
+项目统一配置见 [组合式数据接口](data-access.md)。复制 `crypto-boom.example.toml` 为
+`crypto-boom.toml`，以 `[data].root` 指定唯一数据根；相对路径按配置文件位置解析。
+扫描参数仍是 `[scan].workers`、`timeout_seconds`。命令可用 `--config FILE` 显式选择，
+否则向上查找项目配置；没有配置时仅在识别出的本项目根使用 `data/`，不按子目录另建数据根。
+旧 `scan.toml` 只在显式 `--config` 时兼容，不与新配置合并。下文 data_dir 均指统一 data.root。
 
 `data_dir/models/<内容ID>/` 保存不可变 manifest 和权重；`active.json` 是本地选择：
 

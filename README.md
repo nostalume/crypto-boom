@@ -38,7 +38,8 @@ latest completed history at one shared decision boundary, validates data, comput
 features and writes Markdown, JSON and CSV under `data/reports/`. Failures and
 unattempted members remain in the coverage ledger; partial scans exit with code 2.
 
-See [public contracts and configuration](docs/public-interfaces.md). The selected
+See [public contracts and configuration](docs/public-interfaces.md) and
+[composable data access / shared data root](docs/data-access.md). The selected
 model currently uses hourly context to estimate six-hour maximum upside P90;
 that is configuration, **not the public API's name or fixed cadence**. It is not a
 buy signal or a 90% win probability. Model-specific training/export/replay lives
