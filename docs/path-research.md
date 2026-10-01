@@ -237,3 +237,36 @@ observed_fraction_60、feature_history_ready、origin_admissible、selection_rea
 如需撤回本次工程接入，使用对应集成提交的 git revert；不要删除本地研究
 语料或重置用户暂存区。模型运行仍要求显式受信任的本地文件，旧模型不会被
 自动替换。通过测试意味着工程行为得到检查，不意味着可交易盈利。
+
+## 9. 连续过去状态的公共接口
+
+`features.past_sequence(source, origins, history_minutes=360, step_minutes=5)`
+接收单币种规范分钟数据及 `symbol, decision_us` 起点键，返回相同顺序的键和
+六个 `Array(Float32, 72)` 列：`bucket_return`、`bucket_range`、`log_turnover`、
+`log_trades`、`buy_share`、`observed_fraction`。数组由旧到新，最后一个桶截至
+起点的已完成分钟，不含未来。默认每桶覆盖完整的五分钟而不是稀疏采样价格。
+
+收益为桶末收盘价相对前桶末收盘价的变化；区间为桶内最高价/最低价减一。
+成交额和交易数为桶内合计的 log1p，主动买入占比按成交额加权；无成交额时
+占比记为中性 0.5，同时通过成交额和有成交分钟比例明确区分无活动。
+绝对价格幅度不会按窗口自身最大涨跌归一化。
+
+```python
+from crypto_boom.features import past_sequence
+
+# source: 已加载的单币种规范分钟 DataFrame。
+# origins: symbol 为字符串，decision_us 为 Int64 的已完成分钟时间（UTC 微秒）。
+sequence = past_sequence(source, origins)
+latest_sequence = past_sequence(source, origins.tail(1))
+```
+
+接口要求过去窗口加一根锚定收盘价的连续有效记录；缺失、坏质量、重复或错位
+起点直接拒绝，不补造历史，也不因低成交量删除样本。单次最多二百万源分钟、
+一千万输出数值，较大的调用方须分批。窗口参数须为正整数、可整除，历史最长
+1440 分钟。输出顺序与输入起点一致，可与独立特征/目标缓存按键连接。
+
+这是训练与推理共用的纯变换，不负责抓取、拟合或发布模型。既有 CLI、模型
+格式和默认特征集合不变；序列研究的私有模型不能直接交给旧预测 CLI。
+扩大样本库时可显式调用 `build_feature_cache(..., step_minutes=60,
+minimum_turnover=0)` 保留低活跃起点；此调用选择小时网格，不证明分钟级事件
+覆盖，且不会改变旧缓存或旧模型的人口规则。

@@ -85,8 +85,67 @@ def main(argv: list[str] | None = None) -> int:
     latest.add_argument("--symbol", required=True)
     latest.add_argument("--trust-model", action="store_true")
     latest.add_argument("--json", action="store_true")
+    hourly = commands.add_parser(
+        "train-hourly",
+        help="fit fixed 24h hourly / 6h upside recipe; evaluation still required",
+    )
+    hourly.add_argument("--dataset", required=True, type=Path)
+    hourly.add_argument("--train-end", required=True, type=_utc_us)
+    hourly.add_argument("--model", required=True, type=Path)
+    export = commands.add_parser(
+        "export-hourly", help="export selected local scale study head"
+    )
+    export.add_argument("--study", required=True, type=Path)
+    export.add_argument("--model", required=True, type=Path)
+    export.add_argument("--trust-model", action="store_true")
+    report = commands.add_parser(
+        "report", help="one-command hourly JSON/Markdown prediction report"
+    )
+    report.add_argument("--model", required=True, type=Path)
+    report.add_argument(
+        "--output",
+        type=Path,
+        help="fresh directory; default data/reports/<UTC timestamp>",
+    )
+    source = report.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--symbol",
+        help="fetch latest public bars; forecast from last completed UTC hour",
+    )
+    source.add_argument(
+        "--bars",
+        type=Path,
+        action="append",
+        help="replay canonical local parquet, no network",
+    )
+    report.add_argument("--trust-model", action="store_true")
     args = parser.parse_args(argv)
-    if args.command == "acquire":
+    if args.command == "report":
+        from crypto_boom.prediction_report import generate_prediction_report
+
+        if args.output is None:
+            args.output = Path("data/reports") / datetime.now(UTC).strftime(
+                "%Y%m%dT%H%M%S%fZ"
+            )
+        result = generate_prediction_report(
+            args.model,
+            args.output,
+            symbol=args.symbol,
+            bar_paths=args.bars,
+            trusted=args.trust_model,
+        )
+        print(f"Report: {args.output / 'report.md'}")
+    elif args.command == "export-hourly":
+        from crypto_boom.research.hourly import export_hourly_study
+
+        result = export_hourly_study(args.study, args.model, trusted=args.trust_model)
+    elif args.command == "train-hourly":
+        from crypto_boom.research.hourly import fit_hourly_dataset
+
+        result = fit_hourly_dataset(
+            args.dataset, train_end_us=args.train_end, destination=args.model
+        )
+    elif args.command == "acquire":
         from crypto_boom.history.availability import MonthlyAvailabilityRequest
         from crypto_boom.sample_pool import acquire_sample_pool
 

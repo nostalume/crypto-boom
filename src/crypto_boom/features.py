@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import numpy as np
 import polars as pl
 
-from crypto_boom.bars import MINUTE_US
+from crypto_boom.bars import MINUTE_US, admit_bars
 from crypto_boom.bars import SOURCE_COLUMNS as SOURCE_COLUMNS
 
 PRICE_FEATURES = (
@@ -64,6 +65,155 @@ MARKET_FEATURES = (
 ALL_FEATURES = (
     PRICE_FEATURES + FLOW_FEATURES + PATH_FEATURES + DYNAMICS_FEATURES + MARKET_FEATURES
 )
+
+SEQUENCE_CHANNELS = (
+    "bucket_return",
+    "bucket_range",
+    "log_turnover",
+    "log_trades",
+    "buy_share",
+    "observed_fraction",
+)
+
+
+def past_sequence(
+    source: pl.DataFrame,
+    origins: pl.DataFrame,
+    *,
+    history_minutes: int = 360,
+    step_minutes: int = 5,
+) -> pl.DataFrame:
+    """Past-only, oldest-first nonoverlapping buckets ending at each decision.
+
+    Return/range retain absolute price amplitude; flows are log1p sums, buy share
+    is turnover-weighted (neutral 0.5 for zero flow), and observed fraction counts
+    minutes with trades AND turnover. Zero activity is retained, never imputed.
+    Requires history_minutes + 1 consecutive valid bars (the extra close anchors
+    the first return). Rejects missing/invalid history rather than filling it.
+    Keys preserve caller order; six fixed-size float32 arrays support batch and
+    single-origin inference. No targets, fitting, transport or persistence.
+    """
+    if (
+        type(history_minutes) is not int
+        or type(step_minutes) is not int
+        or not 1 <= step_minutes <= history_minutes <= 1440
+        or history_minutes % step_minutes
+    ):
+        raise ValueError("invalid sequence sampling policy")
+    width = history_minutes // step_minutes
+    if len(source) > 2_000_000 or len(origins) * width * 6 > 10_000_000:
+        raise ValueError("sequence exceeds source/output budget; split the batch")
+    source = admit_bars(source)
+    keys = origins.select("symbol", "decision_us")
+    if (
+        keys["decision_us"].dtype != pl.Int64
+        or keys.null_count().row(0) != (0, 0)
+        or keys.select(pl.struct("symbol", "decision_us").n_unique()).item()
+        != len(keys)
+        or (len(keys) and set(keys["symbol"]) != set(source["symbol"]))
+    ):
+        raise ValueError("invalid sequence origin keys")
+    times = source["open_time"].dt.epoch("us").to_numpy() + MINUTE_US
+    requested = keys["decision_us"].to_numpy()
+    positions = np.searchsorted(times, requested)
+    if np.any(positions >= len(times)) or np.any(positions < history_minutes):
+        raise ValueError("sequence origin lacks history or source observation")
+    valid = (
+        (source["quality_complete"] & (source["quality_state"] == "valid"))
+        .fill_null(False)
+        .to_numpy()
+    )
+    bad = np.r_[0, np.cumsum(~valid)]
+    if (
+        not np.array_equal(times[positions], requested)
+        or np.any(
+            times[positions] - times[positions - history_minutes]
+            != history_minutes * MINUTE_US
+        )
+        or np.any(bad[positions + 1] - bad[positions - history_minutes])
+    ):
+        raise ValueError("sequence history contains a gap, invalid bar or origin")
+    q = pl.col("quote_turnover").rolling_sum(step_minutes)
+    buckets = source.select(
+        (pl.col("close_price") / pl.col("close_price").shift(step_minutes) - 1).alias(
+            "bucket_return"
+        ),
+        (
+            pl.col("high_price").rolling_max(step_minutes)
+            / pl.col("low_price").rolling_min(step_minutes)
+            - 1
+        ).alias("bucket_range"),
+        q.log1p().alias("log_turnover"),
+        pl.col("trade_count").rolling_sum(step_minutes).log1p().alias("log_trades"),
+        pl.when(q > 0)
+        .then(pl.col("taker_buy_quote_turnover").rolling_sum(step_minutes) / q)
+        .otherwise(0.5)
+        .alias("buy_share"),
+        ((pl.col("trade_count") > 0) & (pl.col("quote_turnover") > 0))
+        .cast(pl.Float64)
+        .rolling_mean(step_minutes)
+        .alias("observed_fraction"),
+    )
+    indices = positions[:, None] + np.arange(
+        -history_minutes + step_minutes, 1, step_minutes
+    )
+    arrays = []
+    for name in SEQUENCE_CHANNELS:
+        values = buckets[name].to_numpy()[indices].astype(np.float32)
+        if not np.isfinite(values).all():
+            raise ValueError("nonfinite sequence values")
+        arrays.append(pl.Series(name, values, dtype=pl.Array(pl.Float32, width)))
+    return keys.with_columns(arrays)
+
+
+HOURLY_CONTEXT = (
+    "return_1h",
+    "return_6h",
+    "return_24h",
+    "volatility_6h",
+    "volatility_24h",
+    "activity_1h_vs_previous6h",
+    "buy_share_6h",
+    "observed_fraction_24h",
+)
+HOURLY_FEATURES = (
+    tuple(f"{channel}_{i:02d}" for channel in SEQUENCE_CHANNELS for i in range(24))
+    + HOURLY_CONTEXT
+)
+
+
+def hourly_matrix(source: pl.DataFrame, origins: pl.DataFrame) -> np.ndarray:
+    """152-column v1 representation; completed UTC-hour origins, past 24h only.
+
+    Preserve float32 bucket arithmetic used by the scale experiment. Volatility
+    is std of hourly log returns (ddof=1), not rescaled minute volatility.
+    """
+    if (origins["decision_us"] % (60 * MINUTE_US) != 0).any():
+        raise ValueError("hourly features require completed UTC-hour origins")
+    hour = past_sequence(source, origins, history_minutes=1440, step_minutes=60)
+    r = hour["bucket_return"].to_numpy().astype(float)
+    q = np.expm1(hour["log_turnover"].to_numpy().astype(float))
+    buy = hour["buy_share"].to_numpy().astype(float)
+    context = np.column_stack(
+        [np.prod(1 + r[:, -w:], axis=1) - 1 for w in (1, 6, 24)]
+        + [np.std(np.log1p(r[:, -w:]), axis=1, ddof=1) for w in (6, 24)]
+        + [
+            np.log((q[:, -1] + 1) / (q[:, -7:-1].mean(axis=1) + 1)),
+            np.divide(
+                (q[:, -6:] * buy[:, -6:]).sum(axis=1),
+                q[:, -6:].sum(axis=1),
+                out=np.full(len(q), 0.5),
+                where=q[:, -6:].sum(axis=1) > 0,
+            ),
+            hour["observed_fraction"].to_numpy().mean(axis=1),
+        ]
+    )
+    result = np.column_stack(
+        [hour[channel].to_numpy() for channel in SEQUENCE_CHANNELS] + [context]
+    ).astype(np.float32)
+    if not np.isfinite(result).all():
+        raise ValueError("nonfinite hourly features")
+    return result
 
 
 def iter_feature_segments(

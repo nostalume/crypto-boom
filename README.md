@@ -21,6 +21,25 @@ does not load the optional fitting stack on import.
 
 ## Latest-data prediction (experimental)
 
+### Recommended research report: hourly upside space
+
+The current research-selected candidate is a 24-hour hourly-context model of
+the next six hours' maximum upside P90—not a buy signal or a 90% win probability.
+See the [research paper and negative results](docs/path-prediction-study.md) and
+the [end-to-end workflow](docs/hourly-workflow.md) for model preparation.
+
+With your trusted exported model in `data/hourly-upside-v1`:
+
+```sh
+uv run --extra prediction crypto-boom-study report --model data/hourly-upside-v1 --symbol STXUSDT --trust-model
+```
+
+Writes a readable Markdown report, JSON, and source snapshot to a new timestamped
+directory under `data/reports/`. Uses the last completed UTC hour and discloses
+its age; failed quality heads are not enabled. `--bars <canonical.parquet>` selects
+explicit offline replay instead of `--symbol`. Existing predictors below remain
+compatible; the hourly model uses its own versioned format.
+
 `crypto-boom-predict` provides `train`, frozen-model `backtest`, and `latest`.
 Latest automatically fetches completed minute bars, computes causal features,
 and returns Chinese text or JSON. It predicts **from the current origin**, not
