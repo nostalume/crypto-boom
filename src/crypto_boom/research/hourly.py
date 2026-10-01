@@ -157,7 +157,11 @@ def fit_hourly_dataset(
     dataset_path: Path, *, train_end_us: int, destination: Path
 ) -> dict:
     """Fixed recipe on public path dataset; a new fit is NOT a validated model."""
-    from crypto_boom.feature_batch import origin_observability, read_feature_cache
+    from crypto_boom.feature_batch import (
+        feature_source_paths,
+        origin_observability,
+        read_feature_cache,
+    )
     from crypto_boom.research.path_dataset import load_path_dataset
 
     if destination.exists():
@@ -178,10 +182,13 @@ def fit_hourly_dataset(
         if selected.is_empty():
             continue
         _, receipt = read_feature_cache(Path(batch["features"]))
-        paths = [Path(s["path"]) for s in receipt["spec"]["sources"]]
-        for path, recorded in zip(paths, receipt["spec"]["sources"], strict=True):
-            if _artifacts.file_identity(path)[0] != recorded["sha256"]:
-                raise ValueError("source changed after dataset construction")
+        paths = feature_source_paths(
+            Path(batch["features"]),
+            receipt,
+            paths=[Path(p) for p in batch["source_paths"]]
+            if "source_paths" in batch
+            else None,
+        )
         source, _ = load_bar_files(paths, start_us=0, end_us=2**63 - 1)
         ready = (
             origin_observability(source)

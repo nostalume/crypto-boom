@@ -8,7 +8,7 @@ import os
 import shutil
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
 _HASH_CHUNK_BYTES = 64 * 1_024
@@ -91,3 +91,31 @@ def publication_staging_directory(
     finally:
         if staging.exists():
             shutil.rmtree(staging)
+
+
+def relative_reference(path: Path, *, base: Path) -> str:
+    """Portable locator, not identity; callers retain content hashes separately."""
+    try:
+        return Path(os.path.relpath(path.resolve(), base.resolve())).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            "portable references require a common filesystem volume"
+        ) from exc
+
+
+def resolve_reference(reference: str, *, base: Path) -> Path:
+    """Resolve a v2 relative locator without silently accepting legacy absolutes.
+
+    Parent traversal is intentional for siblings under a shared data root. This is
+    not a sandbox: consumers must verify the referenced artifact's content identity.
+    """
+    if (
+        not isinstance(reference, str)
+        or not reference
+        or reference.startswith("/")
+        or "\\" in reference
+        or Path(reference).is_absolute()
+        or PureWindowsPath(reference).drive
+    ):
+        raise ValueError("expected a portable relative artifact reference")
+    return (base / reference).resolve()

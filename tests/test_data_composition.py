@@ -107,9 +107,16 @@ def test_research_runs_reuse_shared_derived_data(tmp_path, monkeypatch):
         path_dataset,
         "load_sample_pool",
         lambda p: {
+            "selection_id": "fixture",
+            "availability_id": "fixture",
             "symbols_with_data": ["AAAUSDT"],
             "partitions": [
-                {"symbol": "AAAUSDT", "state": "available", "path": str(source)}
+                {
+                    "symbol": "AAAUSDT",
+                    "month": "2026-01",
+                    "state": "available",
+                    "path": str(source),
+                }
             ],
         },
     )

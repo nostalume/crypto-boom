@@ -134,9 +134,13 @@ async def acquire_sample_pool(
     symbols = tuple(selection["symbols"])
     pointer = output / "availability-path.json"
     if pointer.exists():
-        report = load_published_archive_availability(
-            Path(json.loads(pointer.read_text())["path"])
+        saved = json.loads(pointer.read_text(encoding="utf-8"))
+        report_path = (
+            _artifacts.resolve_reference(saved["path"], base=output)
+            if saved.get("schema") == "relative-path-v1"
+            else Path(saved["path"])
         )
+        report = load_published_archive_availability(report_path)
     else:
         published = await asyncio.wait_for(
             probe_historical_archive_availability(
@@ -152,7 +156,13 @@ async def acquire_sample_pool(
         )
         report = published.report
         _artifacts.write_exclusive_bytes(
-            pointer, _artifacts.canonical_json({"path": str(published.path.resolve())})
+            pointer,
+            _artifacts.canonical_json(
+                {
+                    "schema": "relative-path-v1",
+                    "path": _artifacts.relative_reference(published.path, base=output),
+                }
+            ),
         )
     if report.unresolved_count:
         raise ValueError(
@@ -269,10 +279,12 @@ async def acquire_sample_pool(
         "reused_symbol_months": len(partitions) - len(missing),
     }
     target = output / "pool.json"
-    payload = _artifacts.canonical_json(result)
+    result["schema"] = "sample-pool-v2"
+    result["pool_id"] = sample_pool_identity(result)
+    payload = _artifacts.canonical_json(_portable_pool(result, base=output))
     if target.exists():
         # Reuse count describes this invocation, not dataset identity.
-        old = json.loads(target.read_text())
+        old = load_sample_pool(target)
         if old["selection_id"] != result["selection_id"] or old["partitions"] != ledger:
             raise ValueError("completed pool conflicts with current verified sources")
     else:
@@ -281,13 +293,30 @@ async def acquire_sample_pool(
 
 
 def load_sample_pool(path: Path) -> dict:
-    pool = json.loads(path.read_text(encoding="utf-8"))
+    pool: dict = json.loads(path.read_text(encoding="utf-8"))
     if (
-        pool.get("schema") != "sample-pool-v1"
+        pool.get("schema") not in ("sample-pool-v1", "sample-pool-v2")
         or _artifacts.content_id(pool["selection"]) != pool["selection_id"]
     ):
         raise ValueError("invalid sample pool")
-    selection = pool["selection"]
+    if pool["schema"] == "sample-pool-v2":
+        if pool.get("pool_id") != sample_pool_identity(pool):
+            raise ValueError("sample pool identity mismatch")
+        pool = {
+            **pool,
+            "partitions": [
+                {
+                    **row,
+                    "path": str(
+                        _artifacts.resolve_reference(row["path"], base=path.parent)
+                    ),
+                }
+                if "path" in row
+                else row
+                for row in pool["partitions"]
+            ],
+        }
+    selection: dict = pool["selection"]
     months = MonthlyAvailabilityRequest(
         date.fromisoformat(selection["start_month"] + "-01"),
         date.fromisoformat(selection["end_month"] + "-01"),
@@ -445,3 +474,45 @@ def audit_local_corpus(corpus: Path, request: MonthlyAvailabilityRequest) -> dic
         },
         "interpretation": "Inventory and integrity only; no historical eligibility certification. Partial months and zero trading are observations, not automatic rejection. No full-period survival filter.",
     }
+
+
+def sample_pool_identity(pool: dict) -> str:
+    """Selection and partition facts identify a pool; physical locators do not."""
+    return _artifacts.content_id(
+        {
+            "schema": "sample-pool-identity-v2",
+            "selection_id": pool["selection_id"],
+            "availability_id": pool["availability_id"],
+            "partitions": [
+                {k: v for k, v in row.items() if k != "path"}
+                for row in sorted(
+                    pool["partitions"], key=lambda r: (r["symbol"], r["month"])
+                )
+            ],
+        }
+    )
+
+
+def _portable_pool(pool: dict, *, base: Path) -> dict:
+    return {
+        **pool,
+        "schema": "sample-pool-v2",
+        "pool_id": sample_pool_identity(pool),
+        "partitions": [
+            {**row, "path": _artifacts.relative_reference(Path(row["path"]), base=base)}
+            if "path" in row
+            else row
+            for row in pool["partitions"]
+        ],
+    }
+
+
+def export_sample_pool(source: Path, destination: Path) -> dict:
+    """Publish a verified portable manifest; never move data or overwrite history."""
+    if destination.exists():
+        raise FileExistsError(destination)
+    pool = load_sample_pool(source)
+    portable = _portable_pool(pool, base=destination.parent)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _artifacts.write_exclusive_bytes(destination, _artifacts.canonical_json(portable))
+    return portable

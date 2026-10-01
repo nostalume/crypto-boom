@@ -107,7 +107,7 @@ def origin_observability(source: pl.DataFrame) -> pl.DataFrame:
 def read_feature_cache(path: Path) -> tuple[pl.DataFrame, dict]:
     receipt = json.loads((path / "receipt.json").read_text(encoding="utf-8"))
     if (
-        receipt.get("schema") != "feature-cache-v1"
+        receipt.get("schema") not in ("feature-cache-v1", "feature-cache-v2")
         or _artifacts.content_id(receipt["spec"]) != receipt["cache_id"]
     ):
         raise ValueError("invalid feature cache receipt")
@@ -139,12 +139,12 @@ def build_feature_cache(
         or minimum_turnover < 0
     ):
         raise ValueError("invalid feature sampling policy")
-    sources = [
-        {"path": str(p.resolve()), "sha256": _artifacts.file_identity(p)[0]}
-        for p in sorted(paths)
-    ]
+    paths = [p.resolve(strict=True) for p in paths]
+    identities = _source_identities(paths)
+    sources = sorted(identities, key=lambda item: item["sha256"])
     spec: dict[str, object] = {
         "sources": sources,
+        "schema": "causal-feature-recipe-v2",
         "step_minutes": step_minutes,
         "minimum_turnover": minimum_turnover,
         "feature_groups": FEATURE_GROUPS,
@@ -154,8 +154,13 @@ def build_feature_cache(
     }
     cache_id = _artifacts.content_id(spec)
     target = output_root / cache_id.removeprefix("sha256:")
+    references = [
+        {"path": _artifacts.relative_reference(p, base=target), **identity}
+        for p, identity in zip(paths, identities, strict=True)
+    ]
     if target.exists():
-        read_feature_cache(target)
+        if read_feature_cache(target)[1]["cache_id"] != cache_id:
+            raise ValueError("feature cache location has another identity")
         return target, True
     source, _ = load_bar_files(paths, start_us=0, end_us=2**63 - 1)
     source = admit_bars(source)
@@ -215,7 +220,8 @@ def build_feature_cache(
     ) as staging:
         frame.write_parquet(staging / "features.parquet")
         receipt: dict[str, object] = {
-            "schema": "feature-cache-v1",
+            "schema": "feature-cache-v2",
+            "sources": references,
             "cache_id": cache_id,
             "spec": spec,
             "rows": len(frame),
@@ -227,7 +233,47 @@ def build_feature_cache(
         )
 
         def verify(path: Path) -> None:
-            read_feature_cache(path)
+            if read_feature_cache(path)[1]["cache_id"] != cache_id:
+                raise ValueError("feature cache publication identity conflict")
 
         _artifacts.adopt_directory(staging, target, verify_existing=verify)
     return target, False
+
+
+def _source_identities(paths: list[Path]) -> list[dict]:
+    if not paths or len(paths) > 512 or len({p.resolve() for p in paths}) != len(paths):
+        raise ValueError("require 1..512 distinct bar files")
+    if sum(p.stat().st_size for p in paths) > 2_000_000_000:
+        raise ValueError("bar inputs exceed 2 GB")
+    return [
+        {"sha256": digest, "bytes": size}
+        for digest, size in map(_artifacts.file_identity, paths)
+    ]
+
+
+def feature_source_paths(
+    cache: Path, receipt: dict, *, paths: list[Path] | None = None
+) -> list[Path]:
+    """Bind and verify raw inputs for label/sequence research, not feature inference.
+
+    Explicit locations allow individual source moves without changing cache identity
+    or mutating its immutable receipt. A relocated complete tree needs no override.
+    """
+    legacy = receipt["schema"] == "feature-cache-v1"
+    recorded = receipt["spec"]["sources"]
+    if paths is None:
+        paths = (
+            [Path(item["path"]) for item in recorded]
+            if legacy
+            else [
+                _artifacts.resolve_reference(item["path"], base=cache)
+                for item in receipt["sources"]
+            ]
+        )
+    actual = sorted(_source_identities(paths), key=lambda item: item["sha256"])
+    expected = sorted(item["sha256"] for item in recorded)
+    if [item["sha256"] for item in actual] != expected or (
+        not legacy and actual != recorded
+    ):
+        raise ValueError("source changed since feature computation")
+    return paths

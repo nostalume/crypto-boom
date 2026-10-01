@@ -12,7 +12,7 @@ import polars as pl
 
 from crypto_boom import _artifacts
 from crypto_boom.bars import MINUTE_US, admit_bars, load_bar_files
-from crypto_boom.feature_batch import read_feature_cache
+from crypto_boom.feature_batch import feature_source_paths, read_feature_cache
 
 
 @dataclass(frozen=True)
@@ -180,7 +180,11 @@ def read_target_cache(path: Path) -> tuple[pl.DataFrame, dict]:
 
 
 def build_target_cache(
-    feature_cache: Path, *, output_root: Path, spec: PathTargetSpec = DEFAULT_TARGETS
+    feature_cache: Path,
+    *,
+    output_root: Path,
+    spec: PathTargetSpec = DEFAULT_TARGETS,
+    source_paths: list[Path] | None = None,
 ) -> tuple[Path, bool]:
     features, receipt = read_feature_cache(feature_cache)
     identity = {
@@ -191,12 +195,10 @@ def build_target_cache(
     cache_id = _artifacts.content_id(identity)
     target = output_root / cache_id.removeprefix("sha256:")
     if target.exists():
-        read_target_cache(target)
+        if read_target_cache(target)[1]["cache_id"] != cache_id:
+            raise ValueError("target cache location has another identity")
         return target, True
-    paths = [Path(s["path"]) for s in receipt["spec"]["sources"]]
-    for path, recorded in zip(paths, receipt["spec"]["sources"], strict=True):
-        if _artifacts.file_identity(path)[0] != recorded["sha256"]:
-            raise ValueError("source changed since feature computation")
+    paths = feature_source_paths(feature_cache, receipt, paths=source_paths)
     source, _ = load_bar_files(paths, start_us=0, end_us=2**63 - 1)
     targets = path_targets(source, features, spec)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -220,7 +222,8 @@ def build_target_cache(
         )
 
         def verify(path: Path) -> None:
-            read_target_cache(path)
+            if read_target_cache(path)[1]["cache_id"] != cache_id:
+                raise ValueError("target cache publication identity conflict")
 
         _artifacts.adopt_directory(staging, target, verify_existing=verify)
     return target, False

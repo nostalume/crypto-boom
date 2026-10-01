@@ -63,8 +63,8 @@ path 6、dynamics 6。身份包含源字节哈希、代码哈希、取样与流�
 
 `research.path_dataset.build_path_dataset` 批量构建；`load_path_dataset` 校验
 缓存身份、行数与一对一主键后拼接。消费者直接读取 Parquet 或调用接口，
-无需为每组实验再写抓取/清洗/特征脚本。数据集路径为本地绝对路径，迁移机器
-需要一起迁移缓存并显式重建路径引用，不能只复制一个 manifest。
+无需为每组实验再写抓取/清洗/特征脚本。新 v2 清单使用相对引用，运行视图返回绝对路径；整体迁移引用树可保持身份，
+不能只复制一个 manifest。v1 仍按旧路径读取；迁移约束和导出见 [数据接口](data-access.md)。
 
 `research.path_screen.screen_path_features` 用相同行分别比较四组累计特征：
 price → +flow → +path → +dynamics。不是所有子集穷举，也不是因果贡献归因。
