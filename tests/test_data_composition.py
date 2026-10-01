@@ -20,15 +20,12 @@ from test_forward_prediction import BASE, bars
 
 def test_project_root_is_stable_from_nested_directory(tmp_path, monkeypatch):
     config = tmp_path / "crypto-boom.toml"
-    config.write_text(
-        '[data]\nroot="shared"\nlegacy_corpora=["legacy/corpus"]\n[scan]\nworkers=2\n'
-    )
+    config.write_text('[data]\nroot="shared"\n[scan]\nworkers=2\n')
     child = tmp_path / "deep" / "work"
     child.mkdir(parents=True)
     monkeypatch.chdir(child)
     settings = project_settings()
     assert settings.data_root == tmp_path / "shared"
-    assert settings.corpus_roots == (tmp_path / "shared/legacy/corpus",)
     assert project_settings(config) == settings
     config.write_text('[data]\nroot="shared"\n[scan]\ndata_dir="other"\n')
     with pytest.raises(ValueError, match="conflicting"):
@@ -185,7 +182,7 @@ def test_acquire_cli_passes_project_storage_independently_of_run(tmp_path, monke
     from crypto_boom.research.study_cli import main
 
     config = tmp_path / "crypto-boom.toml"
-    config.write_text('[data]\nroot="shared"\nlegacy_corpora=["old/corpus"]\n')
+    config.write_text('[data]\nroot="shared"\n')
     seen = {}
 
     async def acquire(request, **kwargs):
@@ -209,7 +206,7 @@ def test_acquire_cli_passes_project_storage_independently_of_run(tmp_path, monke
     )
     assert seen["data_root"] == tmp_path / "shared"
     assert seen["output"].is_relative_to(tmp_path / "shared/runs")
-    assert seen["reuse_corpora"] == (tmp_path / "shared/old/corpus",)
+    assert seen["reuse_corpora"] == ()
 
 
 def test_retired_scan_config_is_refused_instead_of_changing_root(tmp_path, monkeypatch):
@@ -220,3 +217,10 @@ def test_retired_scan_config_is_refused_instead_of_changing_root(tmp_path, monke
         project_settings()
     with pytest.raises(ValueError, match="configuration keys"):
         project_settings(legacy)
+
+
+def test_retired_corpus_mount_config_is_not_silently_ignored(tmp_path):
+    config = tmp_path / "crypto-boom.toml"
+    config.write_text('[data]\nroot="shared"\nlegacy_corpora=["old"]\n')
+    with pytest.raises(ValueError, match="configuration keys"):
+        project_settings(config)

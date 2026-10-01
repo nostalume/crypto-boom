@@ -36,7 +36,7 @@ window = TimeWindow.from_datetimes(
     datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC),
 )
 selection = select_minute_partitions(
-    (settings.data_root / "canonical/archives", *settings.corpus_roots),
+    (settings.data_root / "canonical/archives",),
     instrument, window,
 )
 if selection.missing_months:
@@ -71,14 +71,14 @@ open/close 取首末，high/low 取最大最小，报价成交额、主动买入
 ```toml
 [data]
 root = "data"
-legacy_corpora = []
 
 [scan]
 workers = 4
 timeout_seconds = 900
 ```
 
-路径相对配置文件；legacy_corpora 相对数据根，也可明确给出绝对路径。
+数据根路径相对配置文件。旧 legacy_corpora 配置已移除；额外导入语料用研究命令
+显式 `--reuse-corpus`，不长期挂载实验目录。
 配置自动向上查找；命令行 `--config` 优先，不悄悄混合多个配置。
 无项目上下文则要求显式配置，避免在陌生目录建立另一个数据根。
 本机 `.publish-work/crypto-boom.toml` 使用 `root="../data"`，故实际根为
@@ -109,14 +109,33 @@ data/
 
 已将本机在用 models/snapshots/reports 从 `.publish-work/data` 移至统一根，迁移逐文件
 核对内容哈希；历史报告中的旧 report_directory 是生成时的位置，未改写历史证据。
-历史 corpus 通过 legacy_corpora 挂载复用，读取时验证分区，不复制129币种大样本库。
+四批历史 corpus 已实际迁入 `canonical/archives`：148 个不同币种、2,035 个原生分区，
+4,070 个文件共 8,545,414,419 字节，逐文件核对迁移前后哈希。旧 corpus 路径已移除，
+没有目录跳转或后台重复下载。
 研究模型导出也已移至 `runs/selected-hourly-export`，逐文件核验哈希后移除空的
 `.publish-work/data`；没有删除历史原始行情。
 
-当前 8 币种样本池已导出至 `runs/path-pool-current-20261001/pool.json`，并在统一
-`derived/features`、`derived/targets` 下重建 60 分钟起点、360 分钟目标的数据集
-（43,008 行；`minimum_turnover=0`）。这是迁移验证用研究数据集，不是新训练结果，
-也不代表 129 币种语料已全部迁移。旧研究记录仍保留，不修改历史评估身份。
+当前研究入口分别在：
+
+- `runs/expanded-path-current-20261001/`：129 币种扩展研究池，705,769 条样本。
+- `runs/acquired-path-current-20261001/`：8 币种获取池，43,008 条样本；与扩展池有一个币种重叠。
+- `runs/universe-expansion-confirm-20260928-v1-migrated/pool.json`：2026 年 5–8 月，141 币种、564 个分区。
+- `runs/universe-expansion-earlyblock-20260929-v1-migrated/pool.json`：2025 年 1–4 月，113 币种、434 个分区。
+
+后两者只迁移原生语料和本地库存池（`local-native-pool-v1`），未重新生成标签或并入
+训练集；币种、分区身份、原时间边界和本地缺月台账保留。可从池记录取相对分区路径，
+或使用公共 `select_minute_partitions` 按标的/时间选择，再独立调用分钟读取和周期聚合。
+这是研究库存记录，不冒充 `sample_pool` 的交易所可用性证据。
+
+
+前两者的特征和目标均在共享 `derived/features`、`derived/targets`，采用 60 分钟起点、
+360 分钟目标、`minimum_turnover=0`。内容寻址的 dataset JSON 由
+`research.path_dataset.load_path_dataset` 读取；不能将 `pool.json` 当作 dataset。
+扩展池的 pool 是研究专用本地审计记录，不是 archive 随机抽样池，不能传给
+`load_sample_pool`；本地缺月仍标记为 locally_absent，不伪称交易所 not_found。
+原 heldout_symbol 分组保留。129 币种的新旧特征/目标逐表完全一致，8 币种新旧
+数据集也完全一致；这是迁移一致性证据，不是模型性能提升。两种 pool 的不同采样
+含义不以统一读取函数掩盖。
 
 ### 可迁移的缓存与清单
 
@@ -134,13 +153,13 @@ data/
   数据集构建保存当前原始文件绑定，供序列研究使用；绑定变化须写入新的运行目录。
   读取已缓存特征不要求原始文件在线，重新使用原始数据时才核验源身份。
 
-旧池可显式导出为新清单，不搬运行情、不覆盖历史：
+对可读取的获取池，可显式导出新清单，不搬运行情、不覆盖历史：
 
 ```python
 from crypto_boom.sample_pool import export_sample_pool
 
 export_sample_pool(
-    settings.data_root / "path-quality-20261001/pool/pool.json",
+    settings.data_root / "runs/acquired-path-current-20261001/pool.json",
     settings.data_root / "runs/portable-pool/pool.json",
 )
 ```
@@ -152,9 +171,14 @@ export_sample_pool(
 本轮不引入万能 DataManager、类型插件注册器或数据库；现有版本化归档布局已经能完成
 当前分区查找。若后续多来源查询确实需要索引，再以真实消费者确定最小索引契约。
 
-### 尚不能删除的历史依赖
+### 历史证据与恢复边界
 
-本机引用审计仍发现 137 份 v1 特征缓存以及使用旧 corpus 的研究记录。
-因此保留旧数据读取分支和 legacy_corpora 挂载，不把它们视为
-已经无用的兼容代码。完成引用核验、迁移对应数据集并验证研究消费者后才能移除。
-当前部署模型不依赖这些旧目录；目录整理不改变模型配方、权重或原评估结论。
+历史研究报告、v1 缓存和稀疏序列产物仍保留，不将旧评估改写为新实验。
+旧缓存可读取已有特征/目标，但旧清单中的绝对原始路径已退役，不能直接重跑原脚本；
+当前开发使用上述新 dataset。需要复现旧输入时，用迁移映射重新绑定原始数据，
+再由 `feature_source_paths(..., paths=...)` 核验内容，不自动猜测路径。
+
+本机映射、逐文件哈希、迁移和重建脚本、数值一致性结果位于
+`data/path-quality-20261001/broad-cutover/`。这些是本地操作证据，不是公共接口。
+旧 `runs/path-pool-current-20261001` 是上一轮的历史清单，以本轮 acquired 路径为准。
+未删除历史衍生缓存，也未重新训练模型；目录整理不改变模型权重和原评估结论。

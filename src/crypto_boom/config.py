@@ -58,7 +58,6 @@ class ProjectSettings:
     """Project location, not the caller's working directory, owns persisted data."""
 
     data_root: Path
-    corpus_roots: tuple[Path, ...] = ()
     workers: int = 4
     timeout_seconds: int = 900
 
@@ -112,25 +111,17 @@ def project_settings(path: Path | None = None) -> ProjectSettings:
     data, scan = document.get("data", {}), document.get("scan", {})
     if not isinstance(data, dict) or not isinstance(scan, dict):
         raise ValueError("data and scan must be configuration tables")
-    if set(data) - {"root", "legacy_corpora"} or set(scan) - {
+    if set(data) - {"root"} or set(scan) - {
         "workers",
         "timeout_seconds",
     }:
         raise ValueError("unknown or conflicting project configuration keys")
     raw_root = data.get("root", "data")
-    mounts = data.get("legacy_corpora", [])
-    if (
-        not isinstance(raw_root, str)
-        or not raw_root.strip()
-        or not isinstance(mounts, list)
-        or len(mounts) > 32
-        or any(not isinstance(p, str) or not p.strip() for p in mounts)
-    ):
-        raise ValueError("invalid data root or legacy corpus locations")
+    if not isinstance(raw_root, str) or not raw_root.strip():
+        raise ValueError("invalid data root")
     root = (path.resolve().parent / raw_root).resolve()
     return ProjectSettings(
         root,
-        tuple((root / p).resolve() for p in mounts),
         scan.get("workers", 4),
         scan.get("timeout_seconds", 900),
     )
