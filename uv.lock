@@ -162,6 +162,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+prediction = [
+    { name = "joblib" },
+    { name = "numpy" },
+    { name = "polars" },
+    { name = "scikit-learn" },
+    { name = "threadpoolctl" },
+]
 research = [
     { name = "interpret-core" },
     { name = "joblib" },
@@ -196,17 +203,22 @@ research = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.14,<4" },
     { name = "interpret-core", marker = "extra == 'research'", specifier = ">=0.7,<1" },
+    { name = "joblib", marker = "extra == 'prediction'", specifier = ">=1.3,<2" },
     { name = "joblib", marker = "extra == 'research'", specifier = ">=1.3,<2" },
     { name = "msgspec", specifier = ">=0.21,<1" },
+    { name = "numpy", marker = "extra == 'prediction'", specifier = ">=2.5,<3" },
     { name = "numpy", marker = "extra == 'research'", specifier = ">=2.5,<3" },
+    { name = "polars", marker = "extra == 'prediction'", specifier = ">=1.44,<2" },
     { name = "polars", marker = "extra == 'research'", specifier = ">=1.44,<2" },
     { name = "pyarrow", specifier = ">=25,<26" },
+    { name = "scikit-learn", marker = "extra == 'prediction'", specifier = ">=1.7,<2" },
     { name = "scikit-learn", marker = "extra == 'research'", specifier = ">=1.7,<2" },
     { name = "scipy", marker = "extra == 'research'", specifier = ">=1.18,<2" },
+    { name = "threadpoolctl", marker = "extra == 'prediction'", specifier = ">=3.1,<4" },
     { name = "threadpoolctl", marker = "extra == 'research'", specifier = ">=3.1,<4" },
     { name = "tsfel", marker = "extra == 'research'", specifier = ">=0.2,<0.3" },
 ]
-provides-extras = ["research"]
+provides-extras = ["prediction", "research"]
 
 [package.metadata.requires-dev]
 dev = [

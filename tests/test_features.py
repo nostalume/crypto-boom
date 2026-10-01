@@ -7,6 +7,13 @@ from polars.testing import assert_frame_equal
 from crypto_boom.features import MARKET_FEATURES, add_peer_context
 
 
+def test_source_columns_import_remains_compatible():
+    from crypto_boom.bars import SOURCE_COLUMNS as canonical
+    from crypto_boom.features import SOURCE_COLUMNS
+
+    assert SOURCE_COLUMNS is canonical
+
+
 def peers() -> pl.DataFrame:
     return pl.DataFrame(
         {

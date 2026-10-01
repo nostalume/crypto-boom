@@ -15,8 +15,36 @@ uv run crypto-boom --help
 uv run pytest
 ```
 
-The `research` dependency group is needed for fitting and feature experiments;
-the base package and CLI do not load those dependencies on import.
+The `research` dependency group supports the historical research suite; the
+forward/path workflows can use the smaller `prediction` extra. The base CLI
+does not load the optional fitting stack on import.
+
+## Latest-data prediction (experimental)
+
+`crypto-boom-predict` provides `train`, frozen-model `backtest`, and `latest`.
+Latest automatically fetches completed minute bars, computes causal features,
+and returns Chinese text or JSON. It predicts **from the current origin**, not
+from an already-triggered 10% rise. Default outputs are median/P90 estimates of
+maximum future minute-close appreciation over 2/6h; the grid is configurable.
+Quantiles are not crossing probabilities, terminal returns or trading signals.
+
+Use `uv sync --extra prediction` for the lean fitting/inference dependency set.
+No new trained artifact or raw corpus is shipped. Train your own model or deploy
+an explicitly trusted artifact with a matching environment. There is no November
+calendar gate. Shared data handling, research fitting and prediction runtime have
+separate owners; see the [interface and deployment guide](docs/forward-prediction.md)
+for commands, canonical inputs, quality metrics, extension and security contracts.
+
+## Reusable path-quality research (experimental)
+
+`crypto-boom-study` adds archive-observed sample pools, checksum-verified causal
+feature caches, separately cached multidimensional path labels, grouped feature
+selection against three training-only baselines, and latest-data vector forecasts.
+It reuses the acquisition interfaces rather than embedding download scripts in
+each experiment. See the [target design and public interfaces](docs/path-research.md).
+The first deployed vector predicts upside/downside excursion, terminal return
+and signed efficiency; retention and threshold-hit outcomes are research labels,
+not yet calibrated live probabilities. No arbitrary combined trading score is used.
 
 ## Scope
 

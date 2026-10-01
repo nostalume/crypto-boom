@@ -10,7 +10,9 @@ from collections.abc import Iterator
 
 import polars as pl
 
-MINUTE_US = 60_000_000
+from crypto_boom.bars import MINUTE_US
+from crypto_boom.bars import SOURCE_COLUMNS as SOURCE_COLUMNS
+
 PRICE_FEATURES = (
     "return_1",
     "return_5",
@@ -33,18 +35,6 @@ FLOW_FEATURES = (
     "buy_share_change",
     "trade_activity_5",
     "log_turnover_1440",
-)
-SOURCE_COLUMNS = (
-    "symbol",
-    "open_time",
-    "close_price",
-    "high_price",
-    "low_price",
-    "quote_turnover",
-    "taker_buy_quote_turnover",
-    "trade_count",
-    "quality_complete",
-    "quality_state",
 )
 
 

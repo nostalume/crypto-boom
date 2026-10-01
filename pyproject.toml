@@ -15,6 +15,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Deploy only the current forward predictor; no TSFEL or historical M1 fitting.
+prediction = [
+    "joblib>=1.3,<2",
+    "numpy>=2.5,<3",
+    "polars>=1.44,<2",
+    "scikit-learn>=1.7,<2",
+    "threadpoolctl>=3.1,<4",
+]
 # Research-only fitting/evaluation runners and polars-side feature modules.
 # Kept optional so the base CLI does not import the fitting stack.
 research = [
@@ -30,6 +38,8 @@ research = [
 
 [project.scripts]
 crypto-boom = "crypto_boom.cli:main"
+crypto-boom-predict = "crypto_boom.predict_cli:main"
+crypto-boom-study = "crypto_boom.study_cli:main"
 
 [dependency-groups]
 dev = [

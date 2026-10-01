@@ -7,7 +7,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from asyncio import sleep
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
@@ -343,8 +343,53 @@ async def probe_monthly_archive_availability(
 ) -> PublishedArchiveAvailability:
     """Probe selected symbol/month checksums and retain absence separately."""
 
-    months = request.months
     selected_symbols = _select_symbols(pool, symbols)
+    return await _probe_selected_symbols(
+        selected_symbols,
+        pool.pool_id,
+        request,
+        output_root=output_root,
+        limits=limits,
+        base_url=base_url,
+    )
+
+
+async def probe_historical_archive_availability(
+    catalog: HistoricalArchiveSymbolCatalog,
+    request: MonthlyAvailabilityRequest,
+    *,
+    symbols: tuple[str, ...],
+    output_root: Path,
+    limits: AvailabilityLimits = DEFAULT_AVAILABILITY_LIMITS,
+    base_url: str = OFFICIAL_MONTHLY_ARCHIVE_BASE_URL,
+) -> PublishedArchiveAvailability:
+    """Probe a historical directory cohort without asserting current tradability."""
+    if (
+        not symbols
+        or tuple(sorted(set(symbols))) != symbols
+        or not set(symbols).issubset(catalog.symbols)
+    ):
+        raise AvailabilityIntegrityError("invalid historical catalog selection")
+    return await _probe_selected_symbols(
+        symbols,
+        _artifacts.content_id(asdict(catalog)),
+        request,
+        output_root=output_root,
+        limits=limits,
+        base_url=base_url,
+    )
+
+
+async def _probe_selected_symbols(
+    selected_symbols: tuple[str, ...],
+    pool_id: str,
+    request: MonthlyAvailabilityRequest,
+    *,
+    output_root: Path,
+    limits: AvailabilityLimits,
+    base_url: str,
+) -> PublishedArchiveAvailability:
+    months = request.months
     probe_count = len(selected_symbols) * len(months)
     if probe_count > limits.maximum_probes:
         raise AvailabilityResourceError(
@@ -374,7 +419,7 @@ async def probe_monthly_archive_availability(
 
     report = ArchiveAvailabilityReport(
         schema_version=1,
-        pool_id=pool.pool_id,
+        pool_id=pool_id,
         base_url=base_url.rstrip("/"),
         interval=request.interval,
         start_month=request.start_month.strftime("%Y-%m"),
