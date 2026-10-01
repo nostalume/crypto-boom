@@ -102,7 +102,7 @@ def test_root_help_preserves_the_command_grammar(
     captured = capsys.readouterr()
     normalized = " ".join(captured.out.split())
     commands = (
-        "{smoke,archive-day,archive-range,instrument-pool,archive-availability,"
+        "{scan,model,smoke,archive-day,archive-range,instrument-pool,archive-availability,"
         "archive-monthly,historical-coverage,research-corpus,qualify-live,"
         "qualify-live-service}"
     )

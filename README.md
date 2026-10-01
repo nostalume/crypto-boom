@@ -21,24 +21,30 @@ does not load the optional fitting stack on import.
 
 ## Latest-data prediction (experimental)
 
-### Recommended research report: hourly upside space
-
-The current research-selected candidate is a 24-hour hourly-context model of
-the next six hours' maximum upside P90—not a buy signal or a 90% win probability.
-See the [research paper and negative results](docs/path-prediction-study.md) and
-the [end-to-end workflow](docs/hourly-workflow.md) for model preparation.
-
-With your trusted exported model in `data/hourly-upside-v1`:
+### Whole-market report
 
 ```sh
-uv run --extra prediction crypto-boom-study report --model data/hourly-upside-v1 --symbol STXUSDT --trust-model
+uv sync --extra prediction
+uv run --extra prediction crypto-boom model list
+uv run --extra prediction crypto-boom model activate --id MODEL_ID --trust-model
+uv run --extra prediction crypto-boom scan
 ```
 
-Writes a readable Markdown report, JSON, and source snapshot to a new timestamped
-directory under `data/reports/`. Uses the last completed UTC hour and discloses
-its age; failed quality heads are not enabled. `--bars <canonical.parquet>` selects
-explicit offline replay instead of `--symbol`. Existing predictors below remain
-compatible; the hourly model uses its own versioned format.
+Activate a trusted, locally published model once; scanning then needs **neither a
+symbol nor a model path**. No trained weights are shipped. First-time preparation
+is documented in the [current model research recipe](docs/hourly-workflow.md).
+The scan discovers all observed Binance Spot TRADING USDT members, fetches their
+latest completed history at one shared decision boundary, validates data, computes
+features and writes Markdown, JSON and CSV under `data/reports/`. Failures and
+unattempted members remain in the coverage ledger; partial scans exit with code 2.
+
+See [public contracts and configuration](docs/public-interfaces.md). The selected
+model currently uses hourly context to estimate six-hour maximum upside P90;
+that is configuration, **not the public API's name or fixed cadence**. It is not a
+buy signal or a 90% win probability. Model-specific training/export/replay lives
+under `crypto_boom.research`; the [research paper](docs/path-prediction-study.md)
+records measured results and failures. Existing research CLIs below remain
+available for reproducibility, not as the recommended market-scanning interface.
 
 `crypto-boom-predict` provides `train`, frozen-model `backtest`, and `latest`.
 Latest automatically fetches completed minute bars, computes causal features,

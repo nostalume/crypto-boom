@@ -18,7 +18,32 @@ from threadpoolctl import threadpool_limits
 
 from crypto_boom import _artifacts
 from crypto_boom.bars import MINUTE_US, admit_bars, load_bar_files
-from crypto_boom.features import HOURLY_FEATURES, hourly_matrix
+from crypto_boom.features import SEQUENCE_CHANNELS, SequenceRecipe, sequence_matrix
+
+HOURLY_CONTEXT = (
+    "return_1h",
+    "return_6h",
+    "return_24h",
+    "volatility_6h",
+    "volatility_24h",
+    "activity_1h_vs_previous6h",
+    "buy_share_6h",
+    "observed_fraction_24h",
+)
+HOURLY_FEATURES = (
+    tuple(f"{channel}_{i:02d}" for channel in SEQUENCE_CHANNELS for i in range(24))
+    + HOURLY_CONTEXT
+)
+
+
+RECIPE = SequenceRecipe(1440, 60, (1, 6, 24), (6, 24), 6, 6, 24)
+
+
+def hourly_matrix(source: pl.DataFrame, origins: pl.DataFrame) -> np.ndarray:
+    """Research v1 recipe; the public runtime is cadence-neutral."""
+    if (origins["decision_us"] % (60 * MINUTE_US) != 0).any():
+        raise ValueError("hourly features require completed UTC-hour origins")
+    return sequence_matrix(source, origins, RECIPE)
 
 
 def _validate(model: HistGradientBoostingRegressor, metadata: dict) -> None:

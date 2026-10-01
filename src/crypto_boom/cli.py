@@ -129,6 +129,20 @@ def _add_qualification_arguments(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="crypto-boom")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    scan = subparsers.add_parser(
+        "scan",
+        help="scan the entire observed Spot USDT universe using the active model",
+    )
+    scan.add_argument(
+        "--config", type=Path, help="default scan.toml; no symbol/model-path arguments"
+    )
+    models = subparsers.add_parser(
+        "model", help="list or explicitly activate local model IDs"
+    )
+    models.add_argument("action", choices=("list", "activate"))
+    models.add_argument("--id", dest="model_id")
+    models.add_argument("--trust-model", action="store_true")
+    models.add_argument("--config", type=Path)
     smoke = subparsers.add_parser(
         "smoke",
         help="validate configuration and emit a read-only run context",
@@ -627,6 +641,50 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the command-line adapter and return its process status."""
 
     arguments = _parser().parse_args(argv)
+    if arguments.command in ("scan", "model"):
+        from crypto_boom.market_scan import scan_market, scan_settings
+        from crypto_boom.model_runtime import activate_model
+
+        try:
+            settings = scan_settings(arguments.config)
+            if arguments.command == "scan":
+                result = asyncio.run(scan_market(settings))
+                _emit_json(
+                    {
+                        k: result[k]
+                        for k in (
+                            "status",
+                            "model_id",
+                            "eligible_symbols",
+                            "counts",
+                            "report_directory",
+                        )
+                    }
+                )
+                return 0 if result["status"] == "complete" else 2
+            registry = settings.data_dir / "models"
+            if arguments.action == "activate":
+                if not arguments.model_id:
+                    raise ValueError("model activate requires --id")
+                activate_model(
+                    registry, arguments.model_id, trusted=arguments.trust_model
+                )
+                _emit_json({"active_model_id": arguments.model_id})
+            else:
+                _emit_json(
+                    {
+                        "models": sorted(
+                            p.parent.name for p in registry.glob("*/manifest.json")
+                        ),
+                        "active": json.loads((registry / "active.json").read_text())
+                        if (registry / "active.json").exists()
+                        else None,
+                    }
+                )
+            return 0
+        except (ValueError, OSError, aiohttp.ClientError, RuntimeError) as exc:
+            print(f"Scan/model error: {exc}", file=sys.stderr)
+            return 1
     if arguments.command == "research-corpus":
 
         def emit_partition(publication: Any) -> None:

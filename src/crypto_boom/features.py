@@ -7,6 +7,7 @@ Input is one admitted Binance-compatible symbol; times denote completed bars.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 import numpy as np
 import polars as pl
@@ -166,54 +167,94 @@ def past_sequence(
     return keys.with_columns(arrays)
 
 
-HOURLY_CONTEXT = (
-    "return_1h",
-    "return_6h",
-    "return_24h",
-    "volatility_6h",
-    "volatility_24h",
-    "activity_1h_vs_previous6h",
-    "buy_share_6h",
-    "observed_fraction_24h",
-)
-HOURLY_FEATURES = (
-    tuple(f"{channel}_{i:02d}" for channel in SEQUENCE_CHANNELS for i in range(24))
-    + HOURLY_CONTEXT
-)
+@dataclass(frozen=True)
+class SequenceRecipe:
+    """Version-1 numeric recipe. Window counts are measured in completed buckets."""
+
+    history_minutes: int
+    step_minutes: int
+    return_steps: tuple[int, ...]
+    volatility_steps: tuple[int, ...]
+    activity_reference_steps: int
+    buy_steps: int
+    observed_steps: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.history_minutes) is not int
+            or type(self.step_minutes) is not int
+            or not 1 <= self.step_minutes <= self.history_minutes <= 1440
+            or self.history_minutes % self.step_minutes
+        ):
+            raise ValueError("invalid sequence recipe scale")
+        width = self.history_minutes // self.step_minutes
+        for windows, minimum in ((self.return_steps, 1), (self.volatility_steps, 2)):
+            if (
+                not isinstance(windows, tuple)
+                or tuple(sorted(set(windows))) != windows
+                or any(type(w) is not int or not minimum <= w <= width for w in windows)
+            ):
+                raise ValueError("invalid sequence recipe windows")
+        if any(
+            type(w) is not int or not 1 <= w <= width
+            for w in (self.buy_steps, self.observed_steps)
+        ):
+            raise ValueError("invalid flow windows")
+        if (
+            type(self.activity_reference_steps) is not int
+            or not 1 <= self.activity_reference_steps < width
+        ):
+            raise ValueError("activity reference requires preceding buckets")
+
+    @property
+    def feature_count(self) -> int:
+        return (
+            6 * (self.history_minutes // self.step_minutes)
+            + len(self.return_steps)
+            + len(self.volatility_steps)
+            + 3
+        )
 
 
-def hourly_matrix(source: pl.DataFrame, origins: pl.DataFrame) -> np.ndarray:
-    """152-column v1 representation; completed UTC-hour origins, past 24h only.
-
-    Preserve float32 bucket arithmetic used by the scale experiment. Volatility
-    is std of hourly log returns (ddof=1), not rescaled minute volatility.
-    """
-    if (origins["decision_us"] % (60 * MINUTE_US) != 0).any():
-        raise ValueError("hourly features require completed UTC-hour origins")
-    hour = past_sequence(source, origins, history_minutes=1440, step_minutes=60)
-    r = hour["bucket_return"].to_numpy().astype(float)
-    q = np.expm1(hour["log_turnover"].to_numpy().astype(float))
-    buy = hour["buy_share"].to_numpy().astype(float)
+def sequence_matrix(
+    source: pl.DataFrame, origins: pl.DataFrame, recipe: SequenceRecipe
+) -> np.ndarray:
+    """Shared numerical transformation; model-specific scale is supplied as data."""
+    buckets = past_sequence(
+        source,
+        origins,
+        history_minutes=recipe.history_minutes,
+        step_minutes=recipe.step_minutes,
+    )
+    r = buckets["bucket_return"].to_numpy().astype(float)
+    q = np.expm1(buckets["log_turnover"].to_numpy().astype(float))
+    buy = buckets["buy_share"].to_numpy().astype(float)
+    w = recipe.buy_steps
     context = np.column_stack(
-        [np.prod(1 + r[:, -w:], axis=1) - 1 for w in (1, 6, 24)]
-        + [np.std(np.log1p(r[:, -w:]), axis=1, ddof=1) for w in (6, 24)]
+        [np.prod(1 + r[:, -n:], axis=1) - 1 for n in recipe.return_steps]
+        + [np.std(np.log1p(r[:, -n:]), axis=1, ddof=1) for n in recipe.volatility_steps]
         + [
-            np.log((q[:, -1] + 1) / (q[:, -7:-1].mean(axis=1) + 1)),
-            np.divide(
-                (q[:, -6:] * buy[:, -6:]).sum(axis=1),
-                q[:, -6:].sum(axis=1),
-                out=np.full(len(q), 0.5),
-                where=q[:, -6:].sum(axis=1) > 0,
+            np.log(
+                (q[:, -1] + 1)
+                / (q[:, -recipe.activity_reference_steps - 1 : -1].mean(axis=1) + 1)
             ),
-            hour["observed_fraction"].to_numpy().mean(axis=1),
+            np.divide(
+                (q[:, -w:] * buy[:, -w:]).sum(axis=1),
+                q[:, -w:].sum(axis=1),
+                out=np.full(len(q), 0.5),
+                where=q[:, -w:].sum(axis=1) > 0,
+            ),
+            buckets["observed_fraction"]
+            .to_numpy()[:, -recipe.observed_steps :]
+            .mean(axis=1),
         ]
     )
-    result = np.column_stack(
-        [hour[channel].to_numpy() for channel in SEQUENCE_CHANNELS] + [context]
+    matrix = np.column_stack(
+        [buckets[c].to_numpy() for c in SEQUENCE_CHANNELS] + [context]
     ).astype(np.float32)
-    if not np.isfinite(result).all():
-        raise ValueError("nonfinite hourly features")
-    return result
+    if not np.isfinite(matrix).all():
+        raise ValueError("nonfinite sequence features")
+    return matrix
 
 
 def iter_feature_segments(

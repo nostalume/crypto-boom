@@ -10,7 +10,7 @@ from urllib.request import urlopen
 
 import polars as pl
 
-from crypto_boom.bars import admit_bars
+from crypto_boom.bars import admit_bars, decode_minute_page
 
 BASE_URL = "https://data-api.binance.vision"
 
@@ -50,36 +50,9 @@ def fetch_latest(symbol: str, *, minutes: int) -> tuple[pl.DataFrame, int]:
                 "limit": count,
             },
         )
-        if not isinstance(rows, list) or len(rows) != count:
-            raise ValueError("missing minute history or unknown/new symbol")
-        for index, bar in enumerate(rows):
-            expected = page_start + index * 60_000
-            if (
-                not isinstance(bar, list)
-                or len(bar) != 12
-                or type(bar[0]) is not int
-                or bar[0] != expected
-                or type(bar[6]) is not int
-                or bar[6] != expected + 59_999
-                or type(bar[8]) is not int
-            ):
-                raise ValueError(
-                    "invalid, duplicate, out-of-order or unfinished minute bar"
-                )
-            records.append(
-                {
-                    "symbol": symbol,
-                    "open_time": expected * 1000,
-                    "close_price": float(bar[4]),
-                    "high_price": float(bar[2]),
-                    "low_price": float(bar[3]),
-                    "quote_turnover": float(bar[7]),
-                    "taker_buy_quote_turnover": float(bar[10]),
-                    "trade_count": bar[8],
-                    "quality_complete": True,
-                    "quality_state": "valid",
-                }
-            )
+        records.extend(
+            decode_minute_page(rows, symbol=symbol, page_start=page_start, count=count)
+        )
     final_clock = _get_json("/api/v3/time", {})
     if (
         not isinstance(final_clock, dict)

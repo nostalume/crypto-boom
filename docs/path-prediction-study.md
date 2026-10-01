@@ -168,14 +168,15 @@ summary31在固定预留30币种U增益3.434%，全测试七日块区间约[3.59
 未提供的下跌、保持和终点输出返回null，不记0。joblib仅加载显式可信的本地文件，
 校验内容哈希、sklearn版本和特征配方；哈希是完整性证据，不是文件安全认证。
 
-训练起点为UTC整点，实时报告也锚定最新已完成UTC整点。抓取1501根已完成分钟线，
-截取整点前1441根历史，明确报告相对最新分钟的0—59分钟滞后。不得把小时模型悄悄
-用于任意分钟滑动起点，也不得将旧回放称为最新行情。
+当前选定模型的训练起点为UTC整点；通用扫描器从模型元数据读取此步长，
+对全盘统一锚定扫描开始时最新已完成整点，获取此前1441根分钟数据。小时并非公共接口
+的固定约束；替换模型时必须同时提供匹配的历史、聚合尺度和决策步长。
 
-公共流程见 [操作指南](hourly-workflow.md)。现有 acquire/audit/build/screen/rolling
-继续可用，新增 train-hourly、export-hourly、report。新训练产物标记未评价，
-不能自动继承本报告的129币种实验结论。完整历史尺度比较仍是本地实验脚本，
-公共train-hourly不是六候选实验或独立测试的替代。
+公共入口为 `crypto-boom scan`，契约见 [公共接口](public-interfaces.md)。
+当前模型的训练、导出、发布、单标的回放迁入 [research 脚本](hourly-workflow.md)，
+不再使用公共 `crypto-boom-study train-hourly/export-hourly/report`。
+已有 acquire/audit/build/screen/rolling 研究工作流保留。新训练产物标记未评价，
+不能自动继承本文实验结论；完整尺度比较仍不是单次训练脚本的替代。
 
 ## 6. 有效性威胁与未完成工作
 
@@ -190,14 +191,14 @@ summary31在固定预留30币种U增益3.434%，全测试七日块区间约[3.59
 ## 7. 复核材料与复现边界
 
 公共实现为 features、feature_batch、sample_pool、research/path_targets、path_screen、
-hourly 与 prediction_report；依赖版本由uv.lock固定。已有模型格式向后兼容。
+research.hourly 与 research.prediction_report；依赖版本由uv.lock固定。已有模型格式向后兼容。
 本报告使用本项目实际实验，不以外部论文替代效果证据，也未开展文献综述。
 
 机器可读摘要及原始报告哈希见 [研究证据索引](research-evidence.json)。原始文件位于
 本地 `data/path-quality-20261001/` 下的报告与 `expanded-path-v1/`；不随代码仓库发布。
 索引不是完整原始数据，外部读者没有这些本地文件时不能逐行复现本次结果。
 关键执行记录含源身份、切分、参数、失败结果、预测文件、模型文件及哈希。
-公共接口支持从自有合法数据重新训练，但数据和人口不同的结果应单独评价。
+研究脚本支持从自有合法数据重新训练，但数据和人口不同的结果应单独评价。
 
 ## 8. 结论
 

@@ -10,16 +10,17 @@ from threadpoolctl import threadpool_limits
 
 from crypto_boom import _artifacts, latest_market
 from crypto_boom.bars import MINUTE_US
-from crypto_boom.features import hourly_matrix, past_sequence
-from crypto_boom.prediction_report import generate_prediction_report
+from crypto_boom.features import past_sequence
 from crypto_boom.research.hourly import (
     export_hourly_study,
     fit_hourly_dataset,
     forecast_hourly,
+    hourly_matrix,
     load_hourly_model,
     save_hourly_model,
 )
-from crypto_boom.study_cli import main
+from crypto_boom.research.hourly_cli import main
+from crypto_boom.research.prediction_report import generate_prediction_report
 from test_forward_prediction import BASE, bars
 
 

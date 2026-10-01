@@ -1,4 +1,4 @@
-"""One report operation: trusted model + live/replayed bars -> JSON and Markdown."""
+"""Legacy single-symbol research report, not the public market-scanning interface."""
 
 from __future__ import annotations
 
