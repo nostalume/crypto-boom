@@ -1,0 +1,301 @@
+"""Causal minute features shared by research and an eventual online scorer.
+
+No outcome labels, forward shifts, training or transport effects belong here.
+Input is one admitted Binance-compatible symbol; times denote completed bars.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+import polars as pl
+
+MINUTE_US = 60_000_000
+PRICE_FEATURES = (
+    "return_1",
+    "return_5",
+    "return_15",
+    "return_60",
+    "return_360",
+    "volatility_60",
+    "volatility_360",
+    "drawdown_60",
+    "drawdown_360",
+    "range_60",
+    "close_location",
+    "return_previous_5",
+)
+FLOW_FEATURES = (
+    "activity_5",
+    "activity_60",
+    "buy_share_5",
+    "buy_share_60",
+    "buy_share_change",
+    "trade_activity_5",
+    "log_turnover_1440",
+)
+SOURCE_COLUMNS = (
+    "symbol",
+    "open_time",
+    "close_price",
+    "high_price",
+    "low_price",
+    "quote_turnover",
+    "taker_buy_quote_turnover",
+    "trade_count",
+    "quality_complete",
+    "quality_state",
+)
+
+
+PATH_FEATURES = (
+    "path_efficiency_15",
+    "up_impulse_share_15",
+    "positive_fraction_15",
+    "close_position_60",
+    "volatility_compression",
+    "scaled_return_5",
+)
+DYNAMICS_FEATURES = (
+    "turnover_change_5",
+    "buy_share_previous_5",
+    "buy_acceleration_5",
+    "price_acceleration_5",
+    "flow_price_agreement_15",
+    "trade_size_change_5",
+)
+MARKET_FEATURES = (
+    "peer_return_5",
+    "relative_return_5",
+    "relative_return_60",
+    "peer_positive_fraction_15",
+    "peer_dispersion_15",
+)
+ALL_FEATURES = (
+    PRICE_FEATURES + FLOW_FEATURES + PATH_FEATURES + DYNAMICS_FEATURES + MARKET_FEATURES
+)
+
+
+def iter_feature_segments(
+    source: pl.DataFrame, *, rich: bool = False
+) -> Iterator[pl.DataFrame]:
+    """Yield causal features at every minute, separately across quality gaps."""
+    if source["symbol"].n_unique() != 1:
+        raise ValueError("forecast feature input must contain exactly one symbol")
+    source = source.sort("open_time")
+    if source["open_time"].n_unique() != len(source):
+        raise ValueError("duplicate symbol-minute in forecast source")
+    source = source.filter(
+        pl.col("quality_complete") & (pl.col("quality_state") == "valid")
+    ).with_columns(
+        pl.col("open_time").dt.epoch("us").alias("open_us"),
+        pl.col(
+            "close_price",
+            "high_price",
+            "low_price",
+            "quote_turnover",
+            "taker_buy_quote_turnover",
+            "trade_count",
+        ).cast(pl.Float64),
+    )
+    source = source.with_columns(
+        (pl.col("open_us").diff() != MINUTE_US)
+        .fill_null(True)
+        .cum_sum()
+        .alias("segment")
+    )
+    for frame in source.partition_by("segment", maintain_order=True):
+        if len(frame) < 1441:
+            continue
+        c = pl.col("close_price")
+        q = pl.col("quote_turnover")
+        buy = pl.col("taker_buy_quote_turnover")
+        trades = pl.col("trade_count")
+        frame = (
+            frame.with_columns(
+                (pl.col("open_us") + MINUTE_US).alias("decision_us"),
+                (c / c.shift(1)).log().alias("log_return"),
+                q.rolling_sum(1440).alias("turnover_1440"),
+                q.rolling_sum(5).alias("q5"),
+                q.rolling_sum(60).alias("q60"),
+                buy.rolling_sum(5).alias("b5"),
+                buy.rolling_sum(60).alias("b60"),
+            )
+            .with_columns(
+                *[
+                    (c / c.shift(w) - 1).alias(f"return_{w}")
+                    for w in (1, 5, 15, 60, 360)
+                ],
+                *[
+                    pl.col("log_return").rolling_std(w).alias(f"volatility_{w}")
+                    for w in (60, 360)
+                ],
+                *[(c / c.rolling_max(w) - 1).alias(f"drawdown_{w}") for w in (60, 360)],
+                (
+                    pl.col("high_price").rolling_max(60)
+                    / pl.col("low_price").rolling_min(60)
+                    - 1
+                ).alias("range_60"),
+                pl.when(pl.col("high_price") > pl.col("low_price"))
+                .then(
+                    (c - pl.col("low_price"))
+                    / (pl.col("high_price") - pl.col("low_price"))
+                )
+                .otherwise(0.5)
+                .alias("close_location"),
+                (c.shift(5) / c.shift(10) - 1).alias("return_previous_5"),
+                ((pl.col("q5") + 1) / (q.shift(5).rolling_mean(60) * 5 + 1))
+                .log()
+                .alias("activity_5"),
+                ((pl.col("q60") + 1) / (q.shift(60).rolling_mean(1380) * 60 + 1))
+                .log()
+                .alias("activity_60"),
+                (
+                    (trades.rolling_sum(5) + 1)
+                    / (trades.shift(5).rolling_mean(60) * 5 + 1)
+                )
+                .log()
+                .alias("trade_activity_5"),
+                *[
+                    pl.when(pl.col(f"q{w}") > 0)
+                    .then(pl.col(f"b{w}") / pl.col(f"q{w}"))
+                    .otherwise(0.5)
+                    .alias(f"buy_share_{w}")
+                    for w in (5, 60)
+                ],
+                pl.col("turnover_1440").log1p().alias("log_turnover_1440"),
+            )
+            .with_columns(
+                (pl.col("buy_share_5") - pl.col("buy_share_60")).alias(
+                    "buy_share_change"
+                ),
+            )
+        )
+        if rich:
+            frame = _enrich_path_and_activity(frame)
+        yield frame
+
+
+def select_feature_decisions(
+    frame: pl.DataFrame, *, rich: bool = False
+) -> pl.DataFrame:
+    """Five-minute decisions after warm-up and trailing-liquidity admission."""
+    required = PRICE_FEATURES + FLOW_FEATURES
+    if rich:
+        required += PATH_FEATURES + DYNAMICS_FEATURES
+    return frame.filter(
+        (pl.col("decision_us") % (5 * MINUTE_US) == 0)
+        & (pl.col("turnover_1440") >= 1_000_000)
+        & pl.all_horizontal(pl.col(*required).is_finite())
+    )
+
+
+def _enrich_path_and_activity(frame: pl.DataFrame) -> pl.DataFrame:
+    c = pl.col("close_price")
+    r = pl.col("log_return")
+    q = pl.col("quote_turnover")
+    buy = pl.col("taker_buy_quote_turnover")
+    trades = pl.col("trade_count")
+    frame = frame.with_columns(
+        r.abs().rolling_sum(15).alias("_travel15"),
+        r.clip(lower_bound=0).rolling_sum(15).alias("_up15"),
+        c.rolling_max(60).alias("_max60"),
+        c.rolling_min(60).alias("_min60"),
+        pl.when(q.rolling_sum(15) > 0)
+        .then(buy.rolling_sum(15) / q.rolling_sum(15))
+        .otherwise(0.5)
+        .alias("_buy15"),
+    )
+    return frame.with_columns(
+        pl.when(pl.col("_travel15") > 0)
+        .then(r.rolling_sum(15) / pl.col("_travel15"))
+        .otherwise(0.0)
+        .alias("path_efficiency_15"),
+        pl.when(pl.col("_up15") > 0)
+        .then(r.clip(lower_bound=0).rolling_max(15) / pl.col("_up15"))
+        .otherwise(0.0)
+        .alias("up_impulse_share_15"),
+        (r > 0).cast(pl.Float64).rolling_mean(15).alias("positive_fraction_15"),
+        pl.when(pl.col("_max60") > pl.col("_min60"))
+        .then((c - pl.col("_min60")) / (pl.col("_max60") - pl.col("_min60")))
+        .otherwise(0.5)
+        .alias("close_position_60"),
+        (r.rolling_std(15) / (r.shift(15).rolling_std(60) + 1e-8)).alias(
+            "volatility_compression"
+        ),
+        ((c / c.shift(5)).log() / (pl.col("volatility_60") * (5**0.5) + 1e-6)).alias(
+            "scaled_return_5"
+        ),
+        ((pl.col("q5") + 1) / (pl.col("q5").shift(5) + 1))
+        .log()
+        .alias("turnover_change_5"),
+        pl.col("buy_share_5").shift(5).alias("buy_share_previous_5"),
+        (pl.col("buy_share_5") - pl.col("buy_share_5").shift(5)).alias(
+            "buy_acceleration_5"
+        ),
+        (pl.col("return_5") - pl.col("return_previous_5")).alias(
+            "price_acceleration_5"
+        ),
+        ((2 * pl.col("_buy15") - 1) * pl.col("return_15")).alias(
+            "flow_price_agreement_15"
+        ),
+        (
+            ((pl.col("q5") + 1) / (trades.rolling_sum(5) + 1))
+            / ((q.shift(5).rolling_sum(60) + 1) / (trades.shift(5).rolling_sum(60) + 1))
+        )
+        .log()
+        .alias("trade_size_change_5"),
+    )
+
+
+def add_peer_context(rows: pl.DataFrame, *, minimum_peers: int = 20) -> pl.DataFrame:
+    """Leave-one-out same-clock observed-cohort context, never market-wide facts.
+
+    Only input rows admitted from as-of source coverage enter peer membership.
+    Insufficient peer sets yield nulls; caller reports coverage/refusals.
+    """
+    if minimum_peers < 1:
+        raise ValueError("minimum peer count must be positive")
+    if rows.select(pl.struct("symbol", "decision_us").n_unique()).item() != len(rows):
+        raise ValueError("duplicate peer symbol-time")
+    totals = rows.group_by("decision_us").agg(
+        pl.len().alias("_n"),
+        *[pl.col(f"return_{w}").sum().alias(f"_sum{w}") for w in (5, 60)],
+        (pl.col("return_15") > 0).sum().alias("_positive15"),
+        pl.col("return_15").sum().alias("_sum15"),
+        (pl.col("return_15") ** 2).sum().alias("_squares15"),
+    )
+    joined = rows.join(totals, on="decision_us", how="left")
+    n = pl.col("_n").cast(pl.Int64) - 1
+    mean15 = (pl.col("_sum15") - pl.col("return_15")) / n
+    joined = joined.with_columns(
+        n.alias("peer_count"),
+        ((pl.col("_sum5") - pl.col("return_5")) / n).alias("peer_return_5"),
+        (pl.col("return_5") - (pl.col("_sum5") - pl.col("return_5")) / n).alias(
+            "relative_return_5"
+        ),
+        (pl.col("return_60") - (pl.col("_sum60") - pl.col("return_60")) / n).alias(
+            "relative_return_60"
+        ),
+        (
+            (
+                pl.col("_positive15").cast(pl.Int64)
+                - (pl.col("return_15") > 0).cast(pl.Int64)
+            )
+            / n
+        ).alias("peer_positive_fraction_15"),
+        (
+            ((pl.col("_squares15") - pl.col("return_15") ** 2) / n - mean15**2)
+            .clip(lower_bound=0)
+            .sqrt()
+        ).alias("peer_dispersion_15"),
+    )
+    return joined.with_columns(
+        *[
+            pl.when(pl.col("peer_count") >= minimum_peers)
+            .then(pl.col(name))
+            .otherwise(None)
+            .alias(name)
+            for name in MARKET_FEATURES
+        ]
+    ).drop("_n", "_sum5", "_sum60", "_positive15", "_sum15", "_squares15")

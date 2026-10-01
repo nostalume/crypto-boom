@@ -1,0 +1,69 @@
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[project]
+name = "crypto-boom"
+version = "0.1.0"
+description = "Read-only research detector for early explosive altcoin moves"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aiohttp>=3.14,<4",
+    "msgspec>=0.21,<1",
+    "pyarrow>=25,<26",
+]
+
+[project.optional-dependencies]
+# Research-only fitting/evaluation runners and polars-side feature modules.
+# Kept optional so the base CLI does not import the fitting stack.
+research = [
+    "interpret-core>=0.7,<1",
+    "joblib>=1.3,<2",
+    "numpy>=2.5,<3",
+    "polars>=1.44,<2",
+    "scikit-learn>=1.7,<2",
+    "scipy>=1.18,<2",
+    "threadpoolctl>=3.1,<4",
+    "tsfel>=0.2,<0.3",
+]
+
+[project.scripts]
+crypto-boom = "crypto_boom.cli:main"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.168,<7",
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=1.4,<2",
+    "ruff>=0.11,<1",
+    "ty",
+]
+research = [
+    "interpret-core>=0.7,<1",
+    "joblib>=1.3,<2",
+    "numpy>=2.5,<3",
+    "polars>=1.44,<2",
+    "scikit-learn>=1.7,<2",
+    "scipy>=1.18,<2",
+    "threadpoolctl>=3.1,<4",
+    "tsfel>=0.2,<0.3",
+]
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+testpaths = ["tests"]
+markers = [
+    "research: exercises historical runners or research-only code and data; needs the research dependency group",
+]
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E4", "E7", "E9", "F", "I", "RUF", "UP"]
+
+[tool.ty.src]
+include = ["src", "tests"]

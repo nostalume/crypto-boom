@@ -1,0 +1,33 @@
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+
+# Python and build outputs
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/.pytest-*/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+
+# Local observations, receipts, and work records (never part of this public repo)
+/data/
+/.agents/
+/docs/crypto_boom/
+/artifacts/
+/logs/
+*.parquet
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
