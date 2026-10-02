@@ -81,7 +81,7 @@ timeout_seconds = 900
 显式 `--reuse-corpus`，不长期挂载实验目录。
 配置自动向上查找；命令行 `--config` 优先，不悄悄混合多个配置。
 无项目上下文则要求显式配置，避免在陌生目录建立另一个数据根。
-本机 `.publish-work/crypto-boom.toml` 使用 `root="../data"`，故实际根为
+本机根目录 `crypto-boom.toml` 使用 `root="data"`，实际数据根为
 `E:\Proj\script\crypto-boom\data`；该本机配置不入 Git。
 
 默认落点：
@@ -106,6 +106,12 @@ data/
 它们不属于新的默认流程。不要把这一阶段称为全部旧入口迁移完成。
 
 ## 当前迁移与边界
+
+2026-10-02 已将原 `.publish-work` 完整提升为项目根目录，包括源码、测试、文档、
+配置及 Git 主线。现在直接在项目根工作，不再维护两个活动源码树。
+旧项目和未提交 Git 状态保存在 `data/runs/root-promotion-20261002/old-project/`；
+旧发布目录的本地测试/构建产物另存于同级 `publish-local-artifacts/`，不是运行入口。
+以下 `.publish-work/data` 路径仅描述此前的数据迁移历史。
 
 已将本机在用 models/snapshots/reports 从 `.publish-work/data` 移至统一根，迁移逐文件
 核对内容哈希；历史报告中的旧 report_directory 是生成时的位置，未改写历史证据。

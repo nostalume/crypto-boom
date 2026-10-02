@@ -7,6 +7,10 @@ frozen M1 row scorer. It does not place orders or provide trading advice.
 
 ## Install and check
 
+The maintained project now lives at the repository root. The former
+`.publish-work` checkout has been promoted here; use this root's `src/`, tests,
+configuration and Git branch, not the archived pre-migration source tree.
+
 Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```sh
