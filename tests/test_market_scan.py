@@ -118,6 +118,27 @@ def test_full_scope_common_clock_and_partial_ledger(tmp_path, monkeypatch, mode)
             "source_sha256": "fixture",
         }
 
+    async def pool(session, raw, *, deadline):
+        products = [
+            {"source": "binance_spot", "base_ticker": s[:-4], "instrument_id": s}
+            for s in members
+        ]
+        products += [
+            {
+                "source": "okx_perpetual",
+                "base_ticker": base,
+                "instrument_id": base + "-USDT-SWAP",
+            }
+            for base in ("AAA", "UNLISTED")
+        ]
+        return {
+            "status": "partial",
+            "http_requests": 0,
+            "sources": {"binance_spot": {"state": "success"}},
+            "products": products,
+        }
+
+    monkeypatch.setattr("crypto_boom.market_scan.collect_product_pool", pool)
     monkeypatch.setattr(SpotSnapshotClient, "universe", universe)
     monkeypatch.setattr(SpotSnapshotClient, "bars", fetch)
     result = asyncio.run(scan_market(ProjectSettings(tmp_path, workers=1)))
@@ -132,6 +153,20 @@ def test_full_scope_common_clock_and_partial_ledger(tmp_path, monkeypatch, mode)
         assert result["counts"]["success"] == 2
     report = __import__("pathlib").Path(result["report_directory"])
     assert (report / "predictions.csv").is_file() and (report / "report.md").is_file()
+    assert result["schema"] == "market-scan-v2"
+    assert result["product_metadata_status"] == "partial"
+    assert (
+        result["rows"][0]["product_candidates"][-1]["mapping_status"]
+        == "ticker_match_unverified"
+    )
+    assert (
+        result["product_pool"]["products"][-1]["binance_spot_prediction_state"]
+        == "not_covered"
+    )
+    assert "UNLISTED-USDT-SWAP" in (report / "products.csv").read_text(
+        encoding="utf-8-sig"
+    )
+
     assert (
         json.loads((report / "report.json").read_text(encoding="utf-8"))["counts"]
         == result["counts"]

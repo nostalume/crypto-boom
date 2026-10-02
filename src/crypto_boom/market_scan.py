@@ -17,6 +17,7 @@ from crypto_boom.bars import MINUTE_US
 from crypto_boom.config import ProjectSettings
 from crypto_boom.market_data import ScanStopped, SpotSnapshotClient
 from crypto_boom.model_runtime import load_active_model, predict_bars
+from crypto_boom.product_pool import attach_product_coverage, collect_product_pool
 
 
 async def scan_market(settings: ProjectSettings) -> dict:
@@ -32,6 +33,9 @@ async def scan_market(settings: ProjectSettings) -> dict:
     ) as session:
         client = SpotSnapshotClient(session, seconds=settings.timeout_seconds)
         symbols, scope, raw, server_ms = await client.universe()
+        product_pool = await collect_product_pool(
+            session, raw, deadline=client.deadline
+        )
         decision = server_ms * 1000 // step_us * step_us
         refused = set(scope["metadata_refusals"])
         pending = iter(symbols)
@@ -95,6 +99,7 @@ async def scan_market(settings: ProjectSettings) -> dict:
     if set(results) != set(symbols):
         raise AssertionError("universe coverage ledger incomplete")
     rows = [results[s] for s in symbols]
+    attach_product_coverage(product_pool, rows)
     counts = dict(Counter(r["state"] for r in rows))
     status = "complete" if counts.get("success", 0) == len(symbols) else "partial"
     rank_by = identity["rank_by"]
@@ -103,7 +108,9 @@ async def scan_market(settings: ProjectSettings) -> dict:
         key=lambda r: (-r["values"][rank_by], r["symbol"]),
     )
     result = {
-        "schema": "market-scan-v1",
+        "schema": "market-scan-v2",
+        "product_pool": product_pool,
+        "product_metadata_status": product_pool["status"],
         "run_id": run_id,
         "status": status,
         "scope": scope,
@@ -112,7 +119,7 @@ async def scan_market(settings: ProjectSettings) -> dict:
         "decision_us": decision,
         "exchange_snapshot_ms": server_ms,
         "elapsed_seconds": elapsed,
-        "http_requests": requests,
+        "http_requests": requests + product_pool["http_requests"],
         "estimated_decision_age_seconds_at_finish": (server_ms * 1000 - decision) / 1e6
         + elapsed,
         "newer_decision_may_be_available": server_ms * 1000 + elapsed * 1e6
@@ -135,14 +142,17 @@ async def scan_market(settings: ProjectSettings) -> dict:
         f"模型 ID: `{manifest['model_id']}`",
         f"模型步长: {identity['decision_step_minutes']} 分钟; 历史: {recipe.history_minutes} 分钟",
         f"范围成员: {len(symbols)}; 成功: {counts.get('success', 0)}; 其余均列入状态台账",
-        f"耗时: {elapsed:.1f} 秒; 请求数: {requests}",
+        f"耗时: {elapsed:.1f} 秒; 行情请求: {requests}; 产品元数据请求: {product_pool['http_requests']}",
+        f"产品元数据状态: {product_pool['status']}; 不改变上方预测覆盖状态",
+        "数据来源: Binance 现货;跨市场产品只提供同名候选,不预测永续收益。",
+        "完整产品覆盖及未覆盖项见 products.csv;元数据失败不代表产品未上市。",
         f"完成时可能已有更新起点: {result['newer_decision_may_be_available']}",
         "",
         "## 排序预览(完整结果见 predictions.csv / report.json)",
         f"排序字段: {rank_by}; 目标: {description['label']}; 未来窗口: {description['horizon_minutes']} 分钟; 单位: {description['unit']}",
         "",
-        "| 标的 | 数值 |",
-        "|---|---:|",
+        "| 标的 | 数值 | 产品候选(非 native 均待核验) |",
+        "|---|---:|---|",
     ]
     for row in ranking[:30]:
         value = row["values"][rank_by]
@@ -151,7 +161,11 @@ async def scan_market(settings: ProjectSettings) -> dict:
             if description["unit"] in ("fraction", "return_fraction")
             else f"{value:.4f}"
         )
-        lines.append(f"| {row['symbol']} | {formatted} |")
+        candidates = "; ".join(
+            f"{p['source']}:{p['instrument_id']} ({p['mapping_status']})"
+            for p in row["product_candidates"]
+        )
+        lines.append(f"| {row['symbol']} | {formatted} | {candidates} |")
     lines.extend(
         [
             "",
@@ -182,7 +196,15 @@ async def scan_market(settings: ProjectSettings) -> dict:
             "w", encoding="utf-8-sig", newline=""
         ) as stream:
             writer = csv.DictWriter(
-                stream, fieldnames=["symbol", "state", "reason", *models]
+                stream,
+                fieldnames=[
+                    "symbol",
+                    "state",
+                    "reason",
+                    "prediction_data_source",
+                    "product_candidates",
+                    *models,
+                ],
             )
             writer.writeheader()
             for row in [*ranking, *(r for r in rows if r["state"] != "success")]:
@@ -191,8 +213,32 @@ async def scan_market(settings: ProjectSettings) -> dict:
                         "symbol": row["symbol"],
                         "state": row["state"],
                         "reason": row.get("reason", ""),
+                        "prediction_data_source": row["prediction_data_source"],
+                        "product_candidates": json.dumps(
+                            row["product_candidates"], ensure_ascii=False
+                        ),
                         **row.get("values", {}),
                     }
                 )
+        with (staging / "products.csv").open(
+            "w", encoding="utf-8-sig", newline=""
+        ) as stream:
+            fields = [
+                "source",
+                "venue",
+                "product",
+                "instrument_id",
+                "base_ticker",
+                "quote",
+                "asset_category",
+                "contract_value",
+                "contract_value_ccy",
+                "mapping_status",
+                "binance_spot_candidate",
+                "binance_spot_prediction_state",
+            ]
+            writer = csv.DictWriter(stream, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(product_pool["products"])
         staging.rename(output)
     return result

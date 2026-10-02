@@ -659,6 +659,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "status",
                             "model_id",
                             "eligible_symbols",
+                            "product_metadata_status",
                             "counts",
                             "report_directory",
                         )
