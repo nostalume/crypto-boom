@@ -1,272 +1,426 @@
-# 可复用样本池、路径质量与批量特征研究
+# Sample pools, path quality and batch feature research
 
-状态：实验接口，不是已经验证的交易策略。旧 `crypto-boom-predict` 不变；
-新 `crypto-boom-study` 使用独立模型格式。需要安装 `crypto-boom[prediction]`，
-不需要 TSFEL/interpret。没有下单、账户连接或隐含网络访问。
+Status: experimental interfaces, not a validated trading strategy. The existing
+`crypto-boom-predict` remains; `crypto-boom-study` uses a separate model format.
+Install `crypto-boom[prediction]`; TSFEL/interpret are not required. There is no
+order placement, account connection or implicit network access.
 
-## 1. 样本池与质量约束
+## 1. Sample pools and quality constraints
 
-`sample_pool.acquire_sample_pool` 调用历史归档目录发现、月份可用性探测、
-官方归档获取和标准研究分区接口。按 `SHA256(seed:symbol)` 排序抽取，
-固定原始成员，不因后续月份缺失或表现不好而补选。目录包含已退市资产，
-但**目录存在不是已重建的历史交易状态**；不能宣称已完全消除幸存者偏差。
-交易资格仍需历史上市/退市资料进一步补充。
+`sample_pool.acquire_sample_pool` reuses historical archive-directory discovery,
+month-availability probes, official archive acquisition and canonical research
+partitions. Sampling sorts by `SHA256(seed:symbol)` and fixes original membership;
+later missing months or poor performance do not trigger replacement. Directories
+include delisted assets, but **directory presence is not reconstructed historical
+trading status** and does not eliminate survivorship bias. Historical listing and
+delisting evidence is still needed for eligibility.
 
-`selection.json` 记录目录观察时间、种子、排除项和范围；`pool.json` 记录
-每个币种月份的 available / not_found / quarantined 状态。未知网络结果
-不等于不存在，未解决探测会阻止发布完成凭据。隔离必须显式给出月份与原因，
-不改源数据、不自动补缺；完成凭据可以是有质量隔离的部分覆盖。
-失败保留已验证源文件，重跑复用相同校验和分区。单次获取最多 512 个币种月份、
-默认 1 GiB 压缩下载；这些是单次调用上限，不是多次重试的累计额度。
+`selection.json` records directory observation time, seed, exclusions and scope;
+`pool.json` records available / not_found / quarantined status per symbol-month.
+Unknown network outcomes do not mean absence; unresolved probes prevent a completed
+receipt. Quarantine requires explicit months and reasons without modifying sources
+or automatically filling gaps. A completed receipt can describe partial coverage
+with quality quarantines. Failures preserve verified source files; reruns reuse
+identical checksums and partitions. Acquisition is capped at 512 symbol-months
+and, by default, 1 GiB compressed downloads per call, not cumulatively across retries.
 
-特征入口拒绝重复/未对齐时间、非法价格和成交量。缺分钟、质量不合格行
-切断连续历史，不前向填充。每个特征缓存保留缺分钟、零成交、零交易、
-大幅相邻价格变动、实际覆盖、合格起点数量。大涨跌只标记，不按结果删掉。
-默认起点要求过去 1440 分钟成交额不少于 100 万 USDT、1441 根连续分钟线；
-按 UTC 五分钟网格取样。这是研究人口定义，不是可成交性保证。
+Feature admission rejects duplicate/misaligned times and invalid prices/volumes.
+Missing minutes and bad-quality rows break continuous history, without forward
+filling. Each feature cache records missing minutes, zero turnover/trades, large
+adjacent price moves, actual coverage and eligible-origin counts. Large moves are
+flagged, not removed by outcome. Default origins require at least one million
+USDT turnover over the past 1,440 minutes and 1,441 continuous minute bars, sampled
+on a UTC five-minute grid. This defines a research population, not executability.
 
-官方源文件可能修订；存档校验和只证明当前使用字节的一致性，并不证明那些
-字节在历史起点已发布。参见 [Binance 公共数据说明](https://github.com/binance/binance-public-data)。
+Official source files may be revised. Archive checksums establish byte consistency,
+not historical availability at an origin. See the
+[Binance public-data documentation](https://github.com/binance/binance-public-data).
 
-## 2. 目标设计：从当时起点开始，而非先涨 10%
+## 2. Targets start at the origin, not after a 10% rise
 
-以最后完整分钟的收盘价为 C₀，未来第 k 分钟收盘价 Cₖ，
-rₖ=Cₖ/C₀−1，k=0…H。默认 H=120/360 分钟，可配置。
-所有目标均为**分钟收盘路径**，不是盘中最高价触及或可实现成交回报。
+Let C₀ be the last completed minute close, Cₖ the future minute-k close, and
+rₖ=Cₖ/C₀−1 for k=0…H. Default horizons are H=120/360 minutes, configurable.
+All targets describe **minute-close paths**, not intraminute touches or executable returns.
 
-| 维度 | 定义 | 解读 |
+| Dimension | Definition | Interpretation |
 |---|---|---|
-| 上行空间 U | max rₖ（包含 r₀=0） | 最大收盘上涨幅度 |
-| 下行风险 D | −min rₖ | 最大收盘下跌幅度 |
-| 期末方向 R | r_H | 到期实际涨跌，不等于 U |
-| 上涨保持 | max(R,0)/U，U>0 | 到期保留多少上行幅度；U=0 未定义 |
-| 下跌保持 | max(−R,0)/D，D>0 | 下跌延续程度；D=0 未定义 |
-| 路径效率 E | R / Σ\|rₖ−rₖ₋₁\| | −1…1，方向与曲折程度；全程不变为 0 |
-| 停留比例 | 未来 H 个收盘中 rₖ>0 / <0 的比例 | 区别短促脉冲与持续走势 |
-| 路径回撤 | maxₖ(1−Cₖ/maxⱼ≤ₖ Cⱼ) | 先涨后跌的回撤，区别于起点下跌 D |
-| 极值时间 | 首次最大/最小 rₖ 的 k | 允许起点 0；并列取首次 |
-| 幅度查询 | 首次 rₖ≥a 或 rₖ≤−a | a 由调用方显式指定，默认不生成阈值查询；不是固定事件定义 |
-| 到达前不利波动 | 首次到达之前最大反向波动 | 区分平稳到达与先大幅反向后到达 |
+| Upside U | max rₖ, including r₀=0 | Maximum close-based appreciation |
+| Downside D | −min rₖ | Maximum close-based decline |
+| Terminal direction R | r_H | End-of-horizon return, not U |
+| Upside retention | max(R,0)/U for U>0 | Fraction of upside retained at expiry; undefined at U=0 |
+| Downside retention | max(−R,0)/D for D>0 | Persistence of decline; undefined at D=0 |
+| Path efficiency E | R / Σ\|rₖ−rₖ₋₁\| | Direction and tortuosity in −1…1; zero for an unchanged path |
+| Occupancy | Fraction of H future closes with rₖ>0 / <0 | Brief pulses versus persistent positions relative to origin |
+| Path drawdown | maxₖ(1−Cₖ/maxⱼ≤ₖ Cⱼ) | Peak-to-subsequent-close decline, distinct from origin-relative D |
+| Extremum time | First k attaining maximum/minimum rₖ | Origin 0 allowed; ties select first occurrence |
+| Amplitude query | First rₖ≥a or rₖ≤−a | Caller-specified a; no default threshold queries or fixed event definition |
+| Pre-hit adverse excursion | Largest opposite move before first hit | Smooth arrivals versus arrivals after large adverse moves |
 
-完整窗口未到达阈值：hit=0，到达时间/到达前不利波动为空。
-窗口缺失或中间断档：所有该 H 标签为空，不作为负例。保持率无定义与
-未来缺失是不同原因，应结合 U/D 和完整窗口数解读，不能统一补零。
+A complete window without a threshold hit has hit=0 and null hit time/pre-hit
+adverse excursion. Missing or internally gapped windows have null labels for that
+H, not negative outcomes. Undefined retention and incomplete futures are different
+conditions; interpret with U/D and complete-window counts rather than zero-filling.
+`research.path_targets.path_targets` is independently callable; features never import future labels.
 
-`research.path_targets.path_targets` 是独立公共函数；特征层不会导入未来标签。
+## 3. Compute once, then screen in batches
 
-## 3. 只计算一次，再批量筛选
+`feature_batch.build_feature_cache` emits 31 causal features: price 12, flow 7,
+path 6, dynamics 6. Identity includes source-byte hashes, code hash, sampling and
+liquidity policy. Cache hits verify files and keys without recomputing features.
+Separate target caches depend on target specifications and code; changing H or
+amplitude queries does not require feature recomputation. Old versions are not automatically deleted.
 
-`feature_batch.build_feature_cache` 一次输出 31 个因果特征：price 12、flow 7、
-path 6、dynamics 6。身份包含源字节哈希、代码哈希、取样与流动性规则。
-缓存命中仍验证文件与主键，但不重新计算特征。标签缓存另外依赖标签规格
-和代码；改 H 或幅度查询，不需要重算特征。缓存不会自动删旧版本。
+`research.path_dataset.build_path_dataset` builds batches; `load_path_dataset`
+checks cache identities, row counts and one-to-one keys before joining. Consumers
+read Parquet or call the interface instead of repeating acquisition/cleaning/features
+for every experiment. New v2 manifests store relative references and return
+absolute runtime views. Moving the entire reference tree can preserve identity;
+copying only a manifest cannot. V1 retains old-path reading; see
+[data access](data-access.md) for migration/export constraints.
 
-`research.path_dataset.build_path_dataset` 批量构建；`load_path_dataset` 校验
-缓存身份、行数与一对一主键后拼接。消费者直接读取 Parquet 或调用接口，
-无需为每组实验再写抓取/清洗/特征脚本。新 v2 清单使用相对引用，运行视图返回绝对路径；整体迁移引用树可保持身份，
-不能只复制一个 manifest。v1 仍按旧路径读取；迁移约束和导出见 [数据接口](data-access.md)。
+`research.path_screen.screen_path_features` compares four cumulative groups on
+identical rows: price → +flow → +path → +dynamics. This is neither exhaustive
+subset search nor causal attribution. Initial responses are U/P90, D/P90, R/P50
+and E/P50. Other path-quality dimensions remain research labels, **not all trained
+for deployment**. Market cross-sections, order books and funding are not included.
 
-`research.path_screen.screen_path_features` 用相同行分别比较四组累计特征：
-price → +flow → +path → +dynamics。不是所有子集穷举，也不是因果贡献归因。
-第一版四个响应为 U/P90、D/P90、R/P50、E/P50；其余路径质量先作为研究标签，
-**尚未全部训练为部署预测**。同市场横截面、订单簿、资金费率暂不纳入。
+Time is split into train / selection / test. Labels crossing the first two
+boundaries are purged by H minutes. Each response selects features on selection,
+then evaluates on test without test-driven reselection. Metadata preserves all
+candidate attempts. Baselines are training-wide fixed quantiles, per-symbol
+training quantiles and training volatility-bin quantiles. Unknown symbols/empty
+bins fall back to the global training quantile. Reports include pinball loss,
+coverage, reductions against each baseline, per-symbol metrics and metrics on
+origins spaced more than H apart within each symbol.
 
-时间分成 train / selection / test。前两个区间末尾剔除跨边界 H 分钟标签；
-只在 selection 选每个响应的特征组，再在 test 评估，不利用 test 重新选组。
-所有候选尝试留在模型 metadata。比较训练期固定分位数、训练期逐币分位数、
-训练期波动率分箱分位数三种基线；未知币种/空分箱退回训练总体分位数。
-报告 pinball loss、覆盖率、相对各基线降幅、逐币指标与每币间隔超过 H 的指标。
+Loss reduction = 1−model loss/baseline loss, not success rate or profit. P90
+coverage is the fraction of outcomes at or below the prediction, not a 90% chance
+of reaching it. See [scikit-learn's pinball-loss documentation](https://scikit-learn.org/stable/modules/model_evaluation.html#pinball-loss).
+Overlapping windows, shared market moves and repeated selection affect effective
+evidence. Sparse samples are not necessarily independent. Results establish
+neither after-cost returns nor prospective validity; conditional block-interval
+limitations appear below.
 
-损失降幅 = 1−模型损失/基线损失，不是成功率或利润。
-P90 覆盖率检查观察结果≤预测分位数的比例，不是“90% 会涨到该幅度”。
-Pinball 与分位数预测目标对应，见 [scikit-learn 指标说明](https://scikit-learn.org/stable/modules/model_evaluation.html#pinball-loss)。
-重叠窗口、同市场共振、选组次数均影响有效证据量；稀疏样本也不是完全独立样本。
-这些结果不提供成本后收益或真实前瞻有效性证明；周块区间的条件与限制见下文。
-
-## 4. 命令行与部署
+## 4. CLI and experimental deployment
 
 ```sh
 crypto-boom-study acquire --start-month 2025-09 --end-month 2026-04 --count 24 --seed forward-path-v1 --output data/pool
 crypto-boom-study build --pool data/pool/pool.json --output data/batches --horizons 120 360 --amplitudes 0.05 0.1 0.2
-# build 输出 manifest 路径，替换下行的 DATASET.json
+# Replace DATASET.json below with the manifest path printed by build.
 crypto-boom-study screen --dataset DATASET.json --train-end 2026-01-01 --selection-end 2026-03-01 --horizon 360 --model data/path-model
 crypto-boom-study latest --model data/path-model --symbol BTCUSDT --trust-model
 crypto-boom-study latest --model data/path-model --symbol BTCUSDT --trust-model --json
 ```
 
-仅 acquire/latest 联网。latest 使用现有 `latest_market.fetch_latest`，自动计算
-最新完整分钟特征，拒绝过时/未完成/断档/低流动性输入。未见过的币种标为
-outside_training_symbols，而非冒充已验证覆盖。joblib 只能加载你自己信任的文件。
-模型目录不覆盖，报告没有达到基线优势也不自动隐藏模型或挑另一套测试期。
+Only acquire/latest access the network. Latest reuses `latest_market.fetch_latest`,
+automatically computes latest completed-minute features and rejects stale,
+incomplete, gapped or low-liquidity inputs. Unseen symbols are marked
+`outside_training_symbols`, not represented as validated coverage. Load only
+trusted joblib files. Model directories are not overwritten; lack of baseline
+advantage does not silently hide a model or switch test periods.
 
-综合输出采用“上行空间 + 下行风险 + 期末方向 + 路径效率 + 证据状态”的向量。
-不把不同边际分位数相乘成联合概率，不用上行分位数除下行分位数冒充盈亏比，
-不擅自指定效用权重合成交易分数。要输出“优质上涨概率”，下一步应预先定义
-上涨、最大可承受下跌、保持率和持续时间的联合标签，并单独校准和验证。
+Combined output is a vector: upside + downside + terminal direction + path
+efficiency + evidence status. Marginal quantiles are not multiplied into joint
+probabilities; upside/downside quantile ratios are not reward/risk ratios.
+Arbitrary utility weights do not produce a trading score. A high-quality-rise
+probability would require a predefined joint label for appreciation, acceptable
+downside, retention and duration, then separate calibration and validation.
 
+## 5. Rolling audit without another model layer
 
-## 5. 滚动检验：不增加模型层级
-
-`research.path_screen.rolling_path_audit` 复用同一个选组/训练实现，最多接受
-8 个 `(训练截止, 选择截止/检验开始, 检验截止)` UTC 微秒三元组。训练截止
-必须前移，检验区间不得重叠；每折剔除跨检验截止的 H 分钟标签。较早的检验
-数据可以成为之后训练的过去数据，这符合滚动时序，但不能称为全局未读盲测。
+`research.path_screen.rolling_path_audit` reuses the same selection/fitting code
+for up to eight UTC-microsecond triples: (training cutoff, selection cutoff/test
+start, test cutoff). Training cutoffs must advance and test intervals must not
+overlap. Each fold purges H-minute labels crossing its test cutoff. Earlier test
+data can become later training history, consistent with rolling evaluation but
+not a globally unread blind test.
 
 ```sh
 crypto-boom-study rolling --dataset DATASET.json --output data/rolling --window 2025-12-01 2026-01-01 2026-02-01 --window 2026-01-01 2026-02-01 2026-03-01
 ```
 
-每折完整报告独立保存，身份包含数据集、代码、依赖版本、时间窗及迭代数。
-再次运行会验证缓存哈希而不训练；后续折失败不会丢弃已完成折。不自动发布
-新模型、不选“最好看的月份”、不改旧部署模型。结果逐折报告，不能直接平均
-百分比降幅冒充合并损失改善。时间不足或无足够样本明确拒绝，不默默缩短窗口。
+Each fold's full report is stored independently. Identity includes dataset, code,
+dependency versions, windows and iteration count. Reruns validate cached hashes
+without fitting again; later-fold failures preserve completed folds. The audit
+does not publish models, select attractive months or modify deployed models.
+Report folds separately: averaging percentage reductions is not pooled loss
+improvement. Insufficient time/data causes explicit rejection, not shortened windows.
 
-相同有效行上的基线比较现在也覆盖逐币种与间隔超过 H 的起点。检验期额外
-提供相对波动率基线的配对移动周块区间：同一 UTC 日期的所有币种共同进入
-时间块，连续 7 个日历日一块，400 次固定种子重采样，输出增益的 2.5%/97.5%
-分位数。少于 28 个有样本日期不报告区间；出现零基线损失也不制造比率。
-周内保留相关性，不保证周间独立，未计入重新训练/选组的不确定性，因此只是
-**条件性的稳定性诊断**，不是显著性认证。区间跨零应视为增益尚不稳固。
+Baseline comparisons use identical valid rows for per-symbol and greater-than-H
+spaced origins too. Test diagnostics add paired moving-week intervals relative
+to volatility baseline: all symbols from each UTC date enter together, blocks
+span seven consecutive calendar days, and 400 fixed-seed resamples yield gain
+2.5%/97.5% quantiles. Fewer than 28 observed dates suppress the interval; zero
+baseline loss does not produce a fabricated ratio. Within-week dependence is
+preserved, but between-week independence is not guaranteed and retraining/selection
+uncertainty is excluded. These are **conditional stability diagnostics**, not
+significance certification. Intervals crossing zero indicate unstable advantage.
 
-本阶段没有新增依赖、模型种类或通用实验编排框架。历史交易资格资料的补齐、
-扩大有依据的样本覆盖、联合事件概率校准，仍是后续工作，不由滚动检验替代。
+This stage adds no dependency, model family or generic experiment orchestrator.
+Historical eligibility evidence, justified coverage expansion and joint-event
+calibration remain separate unfinished work.
 
-
-## 6. 质量优先：本地审计与无固定幅度阈值
+## 6. Quality first: local audit and no fixed amplitude threshold
 
 ```sh
 crypto-boom-study audit --corpus data/corpus --start-month 2025-09 --end-month 2026-04 --output data/corpus-quality.json
-# 默认只生成连续路径标签；需要阈值查询时才显式加 --amplitudes
+# Continuous path labels are the default; add --amplitudes only for threshold queries.
 crypto-boom-study build --pool data/pool/pool.json --output data/batches --horizons 120 360
 ```
 
-公共 `sample_pool.audit_local_corpus` 复用严格分区加载及标准分钟线校验，最多
-2048 分区、16 GiB Parquet、15分钟。串行处理，不抓行情、不训练、不删除，
-输出校验失败、内部缺口、月边界覆盖、质量标记和零成交/零交易计数。报告已
-存在时 CLI 拒绝覆盖；发生资源上限错误不发布完整报告。
+Public `sample_pool.audit_local_corpus` reuses strict partition loading and
+canonical minute validation, bounded to 2,048 partitions, 16 GiB Parquet and
+15 minutes. It runs serially without acquisition, fitting or deletion, reporting
+validation failures, internal gaps, month-edge coverage, quality flags and zero
+turnover/trade counts. CLI refuses existing reports; resource-limit errors do
+not publish a complete report.
 
-范围必须分清：目录候选数量、抽样数量、已下载本地分区数量、符合起点政策的
-训练样本数量不是同一个指标。24币种归档目录抽样不是全体数据的质量筛选。
-本地不存在的月份不等于官方没有归档；月头/月尾覆盖不足也不直接证明故障或
-上市退市时间。不得仅保留未来所有月份都有数据的币种。
+Directory candidates, sampled symbols, downloaded local partitions and eligible
+training origins are different counts. Sampling 24 archive symbols is not a
+quality screen of the entire corpus. Local absence is not official archive
+absence. Month-edge gaps alone establish neither faults nor listing/delisting
+dates. Do not retain only symbols present in every future month.
 
-“质量”至少包括来源/校验、时间连续性、当时的价格可观测性和目标适用性。
-零成交可能是合法市场状态，但不能当作每一分钟都有新的价格发现。应保留
-观察及其可用性状态；不会因为后续涨得不好而剔除。历史交易资格仍需另行证据。
+Quality includes provenance/checksums, temporal continuity, origin-time price
+observability and target applicability. Zero trading can be legitimate without
+fresh price discovery every minute. Preserve observations and availability
+status, and never remove them because later appreciation was poor. Historical
+eligibility requires separate evidence.
 
-本次调整：`PathTargetSpec().amplitudes == ()`，CLI 同样默认空。连续 U/D/R、
-保持率、效率等定义不变；显式幅度查询继续兼容。已有标签缓存和模型不改写。
-H 是预测时间尺度、P50/P90 是分布查询位置，不是上涨事件阈值，仍需明确。
-现有模型的过去24h成交额100万USDT门槛是**研究人口/流动性政策**，不是数据
-真伪或“高质量”的定义；本轮未偷偷更换旧模型的人口约束。
+`PathTargetSpec().amplitudes == ()`, also the CLI default. Continuous U/D/R,
+retention and efficiency definitions are unchanged; explicit amplitude queries
+remain compatible. Existing caches/models are not rewritten. H is a forecast
+horizon and P50/P90 are distribution-query positions, not appreciation-event
+thresholds; both must still be explicit. Existing models' one-million-USDT past
+24-hour turnover requirement is a **research population/liquidity policy**, not
+data truth or a definition of quality. Old population constraints were not silently changed.
 
-连续定义也有局限：U/D主要测量波动空间，不等于方向；U接近零时保持率不稳定，
-需连同分母报告；分钟收盘路径不包含全部盘中触及；不同币种的绝对幅度不天然
-可比。后续可以评估按起点前波动尺度归一化的表示，但不得用未来波动做归一化，
-也不能未经检验就替换已有目标或将比率加权成交易分数。
+Continuous targets have limits: U/D mainly measure excursion, not direction;
+retention is unstable near U=0 and needs its denominator; minute closes omit
+intraminute touches; absolute amplitudes are not automatically comparable across
+symbols. Future work may test pre-origin-volatility normalization, never future
+volatility, without untested replacement of targets or weighted trading-score claims.
 
+## 7. Data selection v1: standards, opportunities and explosive paths
 
-## 7. Data selection v1：标准、机会池与暴涨路径
+**High quality means reliable observations and sufficient origin information,
+not favorable future returns.** Cleaning cannot remove all market noise. Poor
+measurement, rare-event dilution and insufficient model information are distinct
+problems, not all solved by higher liquidity thresholds.
 
-**高质量指观察可靠、起点信息充分，不指未来涨得好。** 市场本身的噪声不能
-靠清洗全部去除；低质量测量、稀有事件被普通样本淹没、模型信息不足是三个
-不同问题，不能都用提高流动性门槛解决。
+### Fixed minimum standards
 
-### 固定的最低标准
+1. Explicit provenance/checksums, unique minute keys, consistent units and valid price/trade relationships; reject invalid sources.
+2. Only completed minutes through the origin; gaps/bad quality break history without fabricated prices.
+3. Current features require 1,441 continuous valid minutes; insufficient history means not ready, not a negative outcome.
+4. Explicit origin-price evidence. The conservative v1 observed flag requires both positive trades and turnover in the origin minute; also report age since the last traded minute and traded fraction over 60 minutes. This technical minimum does not establish depth, executability or absence of manipulation.
+5. Incomplete/gapped/suspect futures are not no-explosion labels. Label availability and origin admission remain separate. Future missingness may be nonrandom; report its rate rather than deleting hard cases to improve scores.
+6. Listing identity and population attributes such as stablecoin/leveraged-token status need provenance, not outcome-based inference. Unverified historical eligibility stays unknown; file checks do not certify it.
 
-1. 来源身份/校验明确，分钟键唯一、单位一致、合法价格/成交关系；非法源拒绝。
-2. 截至起点仅用已完成分钟；断档/坏质量切断连续历史，不补造价格。
-3. 现有特征要求1441根连续有效分钟；不足则标记未准备好，不当作负例。
-4. 起点价格的观测证据必须显式输出。v1保守可观测标记要求起点分钟有成交
-   （交易数和成交额都大于0）；同时输出距最近成交分钟的年龄和近60分钟
-   有成交比例。此标记只是技术最低条件，不证明深度、可成交性或非操纵。
-5. 未来窗口不足、断档或来源可疑不能当作“没有暴涨”。标签可用性与起点
-   准入分开；未来缺失可能非随机，须报告缺失率，不能靠删难例美化成绩。
-6. 上市身份、稳定币/杠杆代币等研究人口属性需有来源，不能从收益事后判断。
-   尚未核实的历史资格保留未知，不能通过文件检查冒充资格认证。
+`feature_batch.origin_observability(source)` returns a complete per-origin ledger:
+valid, price_observed, contiguous_valid_minutes, minutes_since_traded_bar,
+observed_fraction_60, feature_history_ready, origin_admissible, selection_reason.
+Calculations are past-only, contain no future labels and do not silently remove
+inadmissible rows. Age is measured in completed bars, not exact trade timestamps.
+Join to cached features/labels on shared keys. These flags are not silently applied
+to old models and do not establish a final training population.
 
-`feature_batch.origin_observability(source)` 为每个起点返回完整台账：valid、
-price_observed、contiguous_valid_minutes、minutes_since_traded_bar、
-observed_fraction_60、feature_history_ready、origin_admissible、selection_reason。
-所有计算只看过去，输出不含未来标签，也不默默删除不准入行。年龄按完成的
-分钟线计，不是精确逐笔成交时间。可在统一主键上与缓存特征/标签拼接。
-本轮不把新标记偷偷用于旧模型，也不声称已经建立最终训练人口。
+### Required controls and coverage
 
-### 必须保留的对照与覆盖
+The opportunity pool includes explosive rises, false starts/spike reversals,
+declines and ordinary movement. Do not collect only successes or permanently
+exclude quiet assets. Conservative admission may miss quiet-to-active transitions;
+evaluate events among rejected origins, overall opportunity coverage and admitted
+performance together. Refusing to predict is not a correct prediction, and an
+attractive admitted-only metric is insufficient.
 
-机会池包含未来暴涨、假启动/冲高回落、下跌、普通波动；不得只抓上涨事件，
-也不得以“安静币”为由永久排除低活跃资产。保守起点门槛可能错过从安静状态
-突然启动的行情，所以必须同时评估被拒绝起点中的事件数量、整体机会覆盖、
-准入子集表现；拒绝预测不是成功预测。不能只看准入子集的漂亮指标。
+Future-label-based training sampling does not authorize future-based deployment
+admission. Evaluation preserves natural test prevalence. Event weighting and
+probability calibration are not implemented by this interface.
 
-训练阶段可研究按市场时间块/事件簇限制重复样本权重、适度增加稀有路径权重，
-但这不改变完整检验集的自然发生率。未来标签参与训练抽样不等于可以参与
-部署准入；若训练改变类别发生率，概率输出须在保留自然频率的时间段校准。
-这些权重和校准尚未实现，不由本轮台账替代。
+### The target remains a path, not simply up or down
 
-### 目标仍然是路径，而不是只预测涨跌
+Continuous U/D/R, retention, efficiency and arrival behavior describe different
+path properties without fixed appreciation thresholds. U P90 is not explosion
+probability; reduced excursion loss alone is not explosive-path discovery.
+Joint-target predictive value requires independent validation.
 
-保持无固定涨幅阈值的连续 U/D/R、保持、效率与到达过程。下一步评估原始幅度
-与起点前波动尺度下的相对异常幅度（需要零波动/尺度不足的明确状态），同时
-研究先跌后涨和冲高回落的联合路径。不把U的P90解释为暴涨概率，不通过降低
-波动幅度损失宣称找到了暴涨路径。联合目标是否有预测价值仍需独立验证。
+Acceptance should include provenance/temporal leakage checks, traceable excluded
+populations, event-cluster rather than minute-row support, cross-time/symbol
+stability, probability reliability at natural frequencies and overall coverage.
+No universal quality score or fixed 10%/20% definition of every explosive move is needed.
 
-最终接受标准应包括：源/时序无泄漏、被排除人口可追踪、事件簇而非分钟行的
-支持数、跨时间与币种的稳定性、自然频率下的概率可靠性、总体覆盖率。没有
-必要现在发明一个统一“质量分数”或靠固定10%/20%定义全部暴涨现象。
-
-
-## 8. 主线边界与下一轮实验契约
-
-本次主线接纳的是数据接口、缓存、审计、研究评估及可选实验预测入口，不是
-暴涨识别有效性的认证。没有附带新的训练模型、行情、实验脚本或本地研究报告。
-两个预测入口的模型格式不同：forward-v1维持兼容，path-quantiles-v1为显式
-实验选项。历史 features.SOURCE_COLUMNS 导入继续兼容，规范定义归 bars 所有。
-
-下一轮仅验证一个问题：起点前状态能否同时支持绝对幅度、相对异常强度、
-上涨保持较好的路径判断。分别保留三种连续标签，不用归一化形状替代绝对幅度，
-不事后挑成功案例验证。训练期可使用未来结局组织典型样本及难对照；部署输入
-只能来自起点之前。先冻结人口、模态/标签及样本权重，再在明确声明用途的时间
-区间做校准与比较。已用于诊断目标缺陷的月份不能重新称为未读确认；这不是
-任何日历禁读门槛。
-
-优先复用缓存及简单模型，只有新增表示在预先选定指标上有增益才升级复杂度。
-同时报告绝对涨幅、相对强度、保持、机会覆盖、失败对照和非重复路径支持数。
-不以只改善模态排序或普通波动损失作为“识别暴涨”的完成标准。本次不重训。
-
-如需撤回本次工程接入，使用对应集成提交的 git revert；不要删除本地研究
-语料或重置用户暂存区。模型运行仍要求显式受信任的本地文件，旧模型不会被
-自动替换。通过测试意味着工程行为得到检查，不意味着可交易盈利。
-
-## 9. 连续过去状态的公共接口
+## 8. Public continuous-history interface
 
 `features.past_sequence(source, origins, history_minutes=360, step_minutes=5)`
-接收单币种规范分钟数据及 `symbol, decision_us` 起点键，返回相同顺序的键和
-六个 `Array(Float32, 72)` 列：`bucket_return`、`bucket_range`、`log_turnover`、
-`log_trades`、`buy_share`、`observed_fraction`。数组由旧到新，最后一个桶截至
-起点的已完成分钟，不含未来。默认每桶覆盖完整的五分钟而不是稀疏采样价格。
+accepts canonical single-symbol minute data and `symbol, decision_us` origin keys.
+It returns keys in the same order and six `Array(Float32, 72)` columns:
+`bucket_return`, `bucket_range`, `log_turnover`, `log_trades`, `buy_share`,
+`observed_fraction`. Arrays run oldest to newest; the final bucket ends at the
+origin's completed minute without future data. Defaults cover complete five-minute
+buckets rather than sparse price samples.
 
-收益为桶末收盘价相对前桶末收盘价的变化；区间为桶内最高价/最低价减一。
-成交额和交易数为桶内合计的 log1p，主动买入占比按成交额加权；无成交额时
-占比记为中性 0.5，同时通过成交额和有成交分钟比例明确区分无活动。
-绝对价格幅度不会按窗口自身最大涨跌归一化。
+Return compares each bucket's final close with the previous bucket's final close;
+range is bucket high/low minus one. Turnover and trade counts use log1p of bucket
+sums; taker-buy share is turnover-weighted. Zero-turnover buckets use neutral 0.5
+share while turnover and observed-minute fraction distinguish inactivity. Absolute
+price amplitude is not normalized by the window's own maximum move.
 
 ```python
 from crypto_boom.features import past_sequence
 
-# source: 已加载的单币种规范分钟 DataFrame。
-# origins: symbol 为字符串，decision_us 为 Int64 的已完成分钟时间（UTC 微秒）。
+# source: loaded canonical minute DataFrame for one symbol.
+# origins: string symbol and Int64 decision_us (completed-minute UTC microseconds).
 sequence = past_sequence(source, origins)
 latest_sequence = past_sequence(source, origins.tail(1))
 ```
 
-接口要求过去窗口加一根锚定收盘价的连续有效记录；缺失、坏质量、重复或错位
-起点直接拒绝，不补造历史，也不因低成交量删除样本。单次最多二百万源分钟、
-一千万输出数值，较大的调用方须分批。窗口参数须为正整数、可整除，历史最长
-1440 分钟。输出顺序与输入起点一致，可与独立特征/目标缓存按键连接。
+The interface requires continuous valid history plus one anchor close. Missing,
+bad-quality, duplicate or misaligned origins are rejected without fabricated
+history or low-volume sample deletion. Each call permits at most two million
+source minutes and ten million output values; larger callers must batch.
+Parameters must be positive integers with exact divisibility and history at most
+1,440 minutes. Output preserves origin order and joins independently cached
+features/targets by key.
 
-这是训练与推理共用的纯变换，不负责抓取、拟合或发布模型。既有 CLI、模型
-格式和默认特征集合不变；序列研究的私有模型不能直接交给旧预测 CLI。
-扩大样本库时可显式调用 `build_feature_cache(..., step_minutes=60,
-minimum_turnover=0)` 保留低活跃起点；此调用选择小时网格，不证明分钟级事件
-覆盖，且不会改变旧缓存或旧模型的人口规则。
+This shared training/inference transform does not fetch, fit or publish models.
+Existing CLIs, model formats and default feature sets remain unchanged; private
+sequence models cannot be passed directly to old prediction CLIs. Expansion can
+explicitly use `build_feature_cache(..., step_minutes=60, minimum_turnover=0)` to
+retain low-activity origins. This chooses an hourly grid, does not establish
+minute-level event coverage and does not change old cache/model population policies.
+
+## Recorded-input reference diagnostics
+
+This research workflow uses the optional input evidence emitted by public
+`crypto-boom scan --record-inputs`. It does not fetch data, load models, select
+training cases, set alarms or change activation. Reference/cohort choices remain
+research responsibilities rather than public scan options.
+
+```sh
+uv run --extra prediction python -m crypto_boom.research.input_drift --config crypto-boom.toml reference --report REFERENCE_REPORT/report.json --kind observation
+uv run --extra prediction python -m crypto_boom.research.input_drift --config crypto-boom.toml compare --reference REFERENCE_DIRECTORY --current LATER_REPORT/report.json
+```
+
+Each command prints its directory. Defaults are `<data.root>/runs/input-references`
+and `<data.root>/runs/input-diagnostics`; each subcommand accepts `--output`.
+References contain a compact admitted scan manifest, an exact input-sidecar copy
+and a hash-bound reference manifest. Diagnostics contain English `report.md` and
+full `report.json`. Repeating identical publication verifies bytes; conflicts are
+refused. Relocate whole reference directories without changing their content-ID
+name. No original report or model is overwritten.
+
+Choose `--kind replay` for deliberately reconstructed historical runs; `observation`
+is an explicit research declaration, not proof of historical knowability. Neither
+kind is a training reference. The first version supports **one snapshot per
+reference**, not a multi-period representative population. Do not select a reference
+after seeing a desirable comparison and then call the result independent validation.
+
+Input verification binds sidecar hash/size, row/source/time keys, finite values,
+unique symbols, exact dtype/width and capture coverage to the report. Missing
+original evidence is refused, never reconstructed silently. Partial capture retains
+its full universe and prediction-state counts; observed vectors alone determine
+input-distribution statistics. Current origin must be strictly later. Model,
+recipe, feature/capture code identities, dtype and width must match; a version
+change requires a new declared comparison design, not a market-drift claim.
+
+The report separates:
+
+- Universe members added/removed between these snapshots (not proof of listings/delistings).
+- Prediction coverage and input-capture coverage.
+- Full captured-population feature distributions.
+- The same comparison restricted to common captured symbols.
+
+Per-feature descriptive statistics are mean, median, reference standard deviation,
+standardized mean change, maximum empirical CDF distance, and the current fraction
+outside the reference's observed range. Constant-reference columns have no
+standardized score. No common symbols means matched statistics are unavailable
+(an empty list), not zero distance. Feature indices identify the pinned vector
+order; they are not causal explanations or independent tests. There are no
+p-values, universal alarm thresholds, learned preprocessing, profitability claims
+or automatic retraining decisions. Realized prediction outcomes remain a separate
+[research operation](hourly-workflow.md#reconcile-saved-predictions-with-later-outcomes).
+
+Bounds per snapshot: report <=64 MB / 4,000 raw rows / 2,000 unique members;
+sidecar <=20 MB encoded / 32 MB declared decoded / 16 MB numeric payload;
+1–16,384 features. These are input/work limits, not a total process-memory guarantee.
+Unknown, malformed or oversized inputs abort without a successful partial result.
+All selection is explicit; there is no unbounded directory search or retention job.
+
+## Explicit temporal input and outcome study
+
+```sh
+uv run --extra prediction python -m crypto_boom.research.window_diagnostics --config crypto-boom.toml --manifest selection.json
+```
+
+The command prints a content-addressed directory under
+`<data.root>/runs/temporal-diagnostics` (override with `--output`). It contains
+English `report.md`, detailed `report.json`, and the original `selection.json`.
+This is a research command, not a new public scan mode or monitoring scheduler.
+
+Example selection manifest (timestamps are UTC microseconds; windows are
+half-open and aligned to `step_minutes`):
+
+```json
+{
+  "schema": "temporal-input-study-v1",
+  "kind": "observation",
+  "step_minutes": 60,
+  "as_of_us": 1790906400000000,
+  "reference_window": {
+    "start_us": 1790863200000000,
+    "end_us": 1790870400000000
+  },
+  "observation_window": {
+    "start_us": 1790906400000000,
+    "end_us": 1790910000000000
+  },
+  "entries": [
+    {
+      "decision_us": 1790866800000000,
+      "report": "reports/earlier/report.json",
+      "outcome": "outcomes/CONTENT_ID/report.json"
+    },
+    {
+      "decision_us": 1790906400000000,
+      "report": "reports/later/report.json"
+    }
+  ]
+}
+```
+
+Choose `replay` instead of `observation` for reconstructed historical evidence.
+Paths resolve relative to the supplied manifest; no directory discovery occurs.
+The copied selection preserves the original bytes, not rebased locators: rerun
+with the original manifest, or explicitly rebind paths in a new manifest. Source
+hashes in the report identify the evidence actually consumed.
+
+Every expected grid slot appears, including unlisted or missing reports. Missing
+sidecars and unavailable capture remain visible; corrupted evidence aborts.
+Equivalent repeated origins count once; conflicting evidence at the same origin
+is refused rather than resolved by latest-run selection. Models must match
+throughout; available vectors must also match recipe, capture/feature code,
+dtype and width. Selection should be fixed before inspecting outcomes.
+
+Each observation is compared separately with each available reference origin.
+Per-feature CDF distances are then averaged with **equal reference-origin
+weight**, not by pooling symbol rows. Full captured populations and common-symbol
+subsets remain separate, with pair-specific support and membership changes.
+No common symbols means unavailable matched statistics, not zero distance.
+
+An optional outcome must be a content-addressed `scan-outcomes-v1/v2` artifact
+from the existing reconciliation command. It must bind the exact prediction
+report hash, model, origin and declared target. Its as-of cannot exceed the study
+as-of. Observed rows must be mature and cover a unique, complete symbol ledger
+including unavailable outcomes; losses and coverage are recomputed and checked.
+Period mean losses weight available origins equally. Missing periods or labels
+are never zero; changing populations can affect the results. These diagnostics
+do not establish a causal relation between feature drift and prediction errors.
+
+Limits: 8 reference slots, 32 observation slots, 64 manifest entries; step 1–1,440
+minutes; 64 MB retained reference arrays, 512 MB charged source-file bytes,
+200,000 reference/observation/feature comparisons, a checked 900-second deadline,
+and 32 MB JSON output. Existing per-snapshot limits still apply. These are bounded
+research workloads, not a hard total-memory or preemptive execution guarantee.
+There are no p-values, automatic alarms, downloads, training, activation, or
+claims that replay observations constitute independent multi-period validation.
