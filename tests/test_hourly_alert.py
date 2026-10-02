@@ -10,7 +10,7 @@ from typing import cast
 
 import pytest
 
-from crypto_boom import hourly_alert as alert
+from crypto_boom.research import hourly_alert as alert
 
 
 def klines(

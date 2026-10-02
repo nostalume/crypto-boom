@@ -1,208 +1,266 @@
-# 从相对异常模态到绝对上涨空间：加密资产路径预测的回顾性研究
+# From relative-anomaly modes to absolute upside: a retrospective crypto path-prediction study
 
-**研究记录版本：2026-10-01；性质：工程研究报告，非同行评议论文、非交易策略认证。**
+**Research record: 2026-10-01. Engineering research report, not a peer-reviewed
+paper or certification of a trading strategy.**
 
-## 摘要
+## Abstract
 
-本项目研究能否从预测起点之前的价格与成交状态，推断加密资产随后一段时间的
-上涨空间及路径质量。研究从小样本的归一化路径模态出发，发现模态分数与相对异常
-相关，却未对齐绝对大涨目标。随后引入独立的绝对涨跌空间、终点收益、保持率等
-连续标签，复用129币种、985分区、约4252万根分钟记录，并比较连续历史粒度。
+This project investigates whether price and trading states before a prediction
+origin can describe subsequent crypto upside and path quality. Small-sample,
+normalized path modes correlated with relative anomalies but were misaligned
+with absolute large moves. We introduced separate continuous labels for absolute
+upside/downside, terminal return and retention, reused 129 symbols, 985 partitions
+and approximately 42.52 million minute records, and compared continuous-history resolutions.
 
-在固定过去24小时和未来6小时条件下，小时桶加小时尺度背景的梯度提升分位数模型
-在验证集胜出：测试上涨空间 pinball 损失相对条件基线下降6.03%，预留30币种上
-下降5.35%。固定筛选预算下绝对上涨尾部命中比例为17.19%，条件基线为15.05%。
-但保持率、终点方向尚无稳定增益；筛出的较大上涨空间同时伴随更大下跌风险。
-因此主线仅提供**实验性的绝对上涨空间报告**，不提供买点、盈利概率或默认自动交易。
+With 24-hour history and a six-hour horizon held fixed, hourly buckets plus
+hour-scaled context won validation for gradient-boosted quantile prediction. Test
+upside pinball loss fell 6.03% relative to a conditional baseline, and 5.35% on 30
+reserved symbols. At a fixed selection budget, absolute-upside-tail precision was
+17.19%, versus 15.05% for the conditional baseline. Retention and terminal direction
+showed no stable improvement; larger selected upside came with larger downside.
+Mainline therefore provides **experimental absolute-upside reports**, not entry
+signals, profit probabilities or default automated trading.
 
-## 1. 研究问题与演进
+## 1. Question and research progression
 
-原M1问题是在已上涨约10%的候选中判断是否进一步达到20%。用户随后明确将问题
-改为从任意合法起点描述未来路径，10%/20%可作为查询条件而非必需训练边界。
-历史禁读日历安排已被撤销；本研究仍遵守因果输入、时序切分和不伪称未读确认的要求。
+Original M1 asked whether candidates already up approximately 10% would reach 20%.
+The user changed the question to future paths from any valid origin, with 10%/20%
+as optional queries rather than mandatory training boundaries. The historical
+calendar-based reading restriction was revoked. Causal inputs, temporal splits
+and truthful disclosure of previously inspected periods still apply.
 
-主要研究路线如下：
+1. Build shared acquisition, canonicalization and feature/target caches; separate research fitting from prediction runtime.
+2. Compare path quantiles and rolling windows on eight symbols: excursion predictions improve, direction remains weak.
+3. Construct eight geometric modes from historical future paths; compare linear and tree classifiers and diagnose target mismatch.
+4. Expand to 129 symbols, removing this experiment's fixed minimum-turnover threshold while preserving low activity.
+5. Introduce continuous history, absolute-excursion targets and training-only typical cases/hard controls.
+6. Test retention and drawdown separately; retain failures instead of repeatedly tuning or changing acceptance criteria.
+7. Hold history at 24 hours and compare five-minute/hourly aggregation with corresponding contextual features; select hourly representation.
 
-1. 建立公共获取、规范化、特征及目标缓存，分离研究拟合与预测运行。
-2. 在8币种小样本比较路径分位数模型及滚动时间窗；上涨/下跌空间有增益，方向弱。
-3. 用历史未来路径构造8类几何模态，比较线性分类和树模型，诊断目标错位。
-4. 扩至129币种，取消本轮固定最低成交额门槛，保留低活动状态。
-5. 引入连续历史、绝对空间目标和训练期典型案例/困难对照。
-6. 单独检验保持与回撤；失败后不循环调参，也不偷换验收条件。
-7. 固定24小时历史，比较五分钟/小时聚合及同步尺度特征；选择小时方案。
+Implementation, one completed test and demonstrated effectiveness are different
+states. Negative findings are retained throughout this report.
 
-路线中的“实现”“完成一次检验”和“证明有效”是三个不同状态。本报告保留负面结果。
+## 2. Data and populations
 
-## 2. 数据与人口
+### 2.1 Two distinct experimental pools
 
-### 2.1 两个实验池不能混称
+The initial eight usable symbols came from a fixed 24-symbol historical-directory
+sample out of 728 candidates: 192 symbol-months over September 2025–April 2026,
+with 60 available, 131 officially not found and one quarantined for minute-time
+granularity. The project did not have only eight symbols in total.
 
-初期8币种来自一个固定24币种历史目录抽样，728个候选，2025-09至2026-04共192
-币种月：60可用、131官方未找到、1分区因分钟时间粒度问题隔离。不是整个项目只有8币种。
+Expansion reused a separate corpus: 129 symbols, 985 partitions, 42,524,250 minute
+rows. Audit rejected no partitions and found no internal missing minutes; 20
+partitions were not full calendar months and 47 symbol-months were locally absent.
+There were 9,905,753 rows with zero turnover and zero trades (23.294%). Completeness
+is not predictability or executability. The original corpus used a current trading
+list, introducing **survivorship bias**; directory presence is not historical listing eligibility.
 
-扩容复用另一既有语料库：129币种、985分区、42,524,250分钟行。
-分区审计无拒绝、无内部缺失分钟；20分区不是完整自然月，47个币种月本地缺失。
-零成交额且零交易行9,905,753，占23.294%。完整性不等于可预测性或可成交性。
-这批库最初由当前交易名单选择，**存在存续偏差**；目录出现也不证明历史上市资格。
+Earlier observations do not require survival into later months. Genuine inactivity
+is not missingness, prices are not fabricated, and absolute jumps do not trigger
+sample deletion. Gaps/bad quality break historical or future windows; incomplete
+future windows are not negatives.
 
-不要求币种在后续月份存续才保留早期数据。不把真实无成交当缺失，不补造价格，
-不因绝对大涨就删除样本。坏质量、断档会阻断历史或未来窗口；未来不全不当负例。
+### 2.2 Sampling and splits
 
-### 2.2 抽样和切分
+Hourly evaluation origins yield 705,769 usable feature origins, including 704,995
+with complete six-hour futures. Training uses a UTC six-hour grid to reduce
+adjacent-label duplication, **not to establish independent event clusters**.
 
-扩容后每小时一个评价起点，705,769个可用特征起点，其中704,995有完整6小时未来。
-训练采用UTC六小时网格减少相邻标签重复，**不是事件簇独立性的证明**。
+- Training: September–December 2025; original expanded experiment has 43,648 rows and 94 actual training symbols.
+- Selection: January–February 2026; 133,414 non-reserved-symbol rows.
+- Test: March–April 2026; 186,039 rows across 129 symbols.
+- Symbol SHA256 modulo reserves 30 symbols from all fitting. Five additional non-reserved symbols have no training-period samples.
+- Labels crossing split boundaries are purged. Test opportunities retain natural frequencies, without future-success selection.
 
-- 训练：2025-09至12；原扩容实验43,648行、实际94币种。
-- 选型：2026-01至02，非预留币种133,414行。
-- 测试：2026-03至04，186,039行，覆盖129币种。
-- 按符号SHA256取模预留30币种，不进入任何拟合；另5个非预留币种训练期没有样本。
-- 标签窗口跨越切分边界时清除。测试保持机会池自然频率，不按未来成功挑样本。
+The scale experiment additionally requires full anchored 24-hour history, excluding
+89 rows consistently: 43,563 training, 133,413 validation and 186,037 test rows.
+Some original logs use “seen” to mean non-reserved, not necessarily present in
+training. Expanded diagnostics distinguish actual training symbols, fixed
+reserved symbols and symbols lacking training-period history.
 
-小时尺度实验要求额外完整24小时锚定历史，统一排除89行：训练43,563、验证133,413、
-测试186,037。原日志中的“seen”有时指非预留组，不能误读为全部在训练中出现；
-扩容诊断已区分实际训练币种、固定预留币种和训练期无历史币种。
+## 3. Targets, inputs and evaluation
 
-## 3. 目标、输入与评价
+Let origin close be P₀ and future minute closes over H minutes be Pₜ:
 
-令起点收盘价为P₀，未来H分钟的分钟收盘价为Pₜ：
+- U=max₀≤t≤H(Pₜ/P₀−1): absolute maximum upside.
+- D=−min₀≤t≤H(Pₜ/P₀−1): maximum downside relative to the origin.
+- R=P_H/P₀−1: terminal return.
+- Retention=max(R,0)/U, defined only for U>0; undefined values are not zero-filled.
+- Signed efficiency=R/Σ|Δ(Pₜ/P₀)|; flat paths have value zero.
+- Maximum path drawdown=maxₜ[1−Pₜ/maxₛ≤t Pₛ], distinct from D.
+- Peak/trough times and fractions of time above/below origin remain separate. Above-origin occupancy is not continuous upward duration.
 
-- U=max₀≤t≤H(Pₜ/P₀−1)：绝对最大上涨空间。
-- D=−min₀≤t≤H(Pₜ/P₀−1)：相对起点最大下跌空间。
-- R=P_H/P₀−1：终点收益。
-- 保持率=max(R,0)/U，仅在U>0时定义；未定义不填零。
-- 有符号路径效率=R/Σ|Δ(Pₜ/P₀)|，平坦路径记0。
-- 路径最大回撤=maxₜ[1−Pₜ/maxₛ≤t Pₛ]，不同于D。
-- 峰值/谷值时间、起点上/下方时间占比独立保留。上方占比不是连续上涨持续时间。
+Relative-anomaly diagnostics use U/(pre-origin minute-return volatility×√H),
+leaving zero denominators undefined. This is not yet a formal prediction output
+alongside absolute amplitude; timing targets are not trained either.
 
-相对异常诊断采用U/(起点前分钟收益波动率×√H)，零分母须保持未定义。
-目前尚未将其作为和绝对幅度并列的正式预测输出，也未训练时间目标。
+Inputs use completed history only. Training-period future outcomes may organize
+typical examples, but never enter inputs. Control standardization fits only
+training data. No fixed 10%/20% training labels are required. Tail evaluation uses
+the training U 95th percentile, approximately 5.956% in the expanded experiment:
+an evaluation coordinate, not a natural definition of an explosive move.
 
-输入只取已完成历史。典型路径可用训练期未来结果组织，但这些结果不得作为输入。
-对照的标准化仅用训练数据拟合。无固定10%/20%训练标签；尾部评价采用训练U第95百分位，
-扩容实验约5.956%，仅为评价坐标，不是对“暴涨”的自然定义。
+P90 uses pinball loss; conditional mean retention/drawdown use MSE; modes use
+multiclass log-loss and AP. Baselines include constants, symbol priors and past
+volatility bins. Expanded/hourly studies primarily compare against training
+volatility quartile × trading-activity quartile baselines. Loss reduction is
+1−model loss/baseline loss, **not accuracy improvement or profitability**. Paired
+seven-day moving blocks with 400 resamples diagnose temporal dependence; they do
+not correct for all model selection across the research history.
 
-P90用pinball损失，保持率/回撤均值用MSE，模态用多分类log-loss及AP。基线包括常数、
-币种先验、过去波动分箱；扩容/小时研究的主要基线为训练期波动四分位×成交活跃度四分位。
-损失降幅定义为1−模型损失/基线损失，**不是准确率增长，也不等于盈利率**。
-时间依赖用配对七日移动块400次重采样辅助诊断，不校正整个研究历史的多重选型。
+## 4. Implementations and results
 
-## 4. 模型实现及结果
+### 4.1 Small-pool path quantiles
 
-### 4.1 小样本分位数路径模型
+Approximately 253,187 origins across eight symbols use 31 causal price, flow,
+path and dynamics features. Initial test loss reductions versus training
+volatility bins: U P90 7.80%, D P90 12.79%, R P50 0.017%, efficiency P50 about 0.40%.
+January–April rolling U gains were 6.90%, 2.27%, 0.99%, 8.49%; D gains were 4.28%,
+4.02%, 8.42%, 10.37%. Terminal direction was unstable. ZRO represented about 46.5%
+of test samples; rises of at least 20% had only 96 overlapping origins on three
+symbol-days. Old forward/path formats and CLIs remain compatible, not retroactively
+certified as reliable explosive-move predictors.
 
-8币种约253,187起点，31项因果价格/成交/路径/动态特征。初次测试相对训练波动分箱：
-U P90损失下降7.80%，D P90下降12.79%，R P50仅0.017%，效率P50约0.40%。
-滚动1—4月U增益6.90%、2.27%、0.99%、8.49%；D为4.28%、4.02%、8.42%、10.37%。
-终点方向不稳定。测试ZRO占比约46.5%；≥20%上涨只有96个重叠起点、3个币种日。
-旧forward/path模型格式与CLI保持兼容，不因此被追认成可靠暴涨预测器。
+### 4.2 Geometric modes and classifiers
 
-### 4.2 几何模态与分类器
+On 2,089 training windows spaced more than six hours apart, twelve future
+half-hour nodes were normalized by their own maximum amplitude, with relative
+amplitude added. RobustScaler+KMeans formed eight exploratory geometries, not
+claimed natural market classes. Comparisons used standardized Logistic(C=.1),
+31-feature HGB, 43-feature HGB with twelve historical nodes, and inverse-symbol-day
+weighted HGB. January calibrated temperature, February selected models, and March–April tested them.
 
-在2089个间隔超过6小时的训练窗口，用未来12个半小时节点按自身最大幅度归一化，
-加入相对幅度，RobustScaler+KMeans形成8类探索性几何，不声称是天然市场类别。
-分类比较：标准化Logistic(C=.1)、31特征HGB、加入12个历史节点的43特征HGB、
-币种日反频率加权HGB。温度在1月校准，2月选型，3—4月测试。
+Validation selected 31-feature Logistic with temperature 1.5. Test log-loss was
+2.041664, versus constant prior 2.048383 and volatility bins 2.038553: −0.153%
+gain against volatility, with block interval approximately [−0.819%, 0.251%].
+Strong-mode AP was 0.1423, natural prevalence 0.1042, and volatility-baseline AP
+0.1274. Score rank correlation with absolute U was −0.105, versus about +0.169
+with relative U, exposing the mismatch between relative anomalies and absolute
+large rises. Neither sparse history nodes nor symbol-day weighting won selection;
+this does not establish that sequences are useless.
 
-验证选中31特征Logistic，温度1.5。测试log-loss2.041664，常数先验2.048383，
-波动分箱2.038553；相对波动基线增益−0.153%，块区间约[-0.819%,0.251%]。
-强模态AP0.1423，天然频率0.1042，波动基线AP0.1274。
-其分数与绝对U秩相关−0.105，与相对U约+0.169，暴露“相对异常≠绝对大涨”的错位。
-加入稀疏历史节点和币种日加权均未在选型中胜出，不能据此宣称序列无用。
+### 4.3 Expanded absolute excursion and continuous history
 
-### 4.3 扩容绝对空间与连续历史
+We compared 31 summaries with 31+432 continuous-history inputs: 72 complete
+five-minute buckets across six hours, with six channels. Fixed HGB parameters:
+60 iterations, 15 leaves, minimum 50 samples/leaf, learning rate .08, no early
+stopping, seed 0. U P90, D P90 and R P50 were fitted separately, six fits total;
+validation U loss selected the representation.
 
-31项摘要与31+432项连续历史比较；连续历史为6小时内72个完整五分钟桶、六个通道。
-固定HGB：60迭代、15叶、叶最小50、学习率.08、无早停、随机种子0。
-分别拟合U P90、D P90、R P50，共六次拟合，验证U损失选型。
-
-| 模型 | U测试降幅 | D测试降幅 | R测试降幅 |
+| Model | Test U reduction | Test D reduction | Test R reduction |
 |---|---:|---:|---:|
-| summary31（验证胜出） | 4.385% | 5.704% | 0.001% |
+| summary31 (validation winner) | 4.385% | 5.704% | 0.001% |
 | sequence463 | 4.477% | 6.546% | -0.556% |
 
-summary31在固定预留30币种U增益3.434%，全测试七日块区间约[3.595%,5.304%]。
-尾部AP由条件基线0.1183升至0.1764；同一时刻相同数量筛选，尾部命中15.05%→16.38%。
-但终点收益中位数仍负。新旧人口和抽样政策不同，不能把结果差直接归因于扩容。
+Summary31 achieved 3.434% U gain on the 30 reserved symbols; the full-test
+seven-day block interval was approximately [3.595%, 5.304%]. Tail AP increased
+from the conditional baseline's 0.1183 to 0.1764. Equal-count selection at the
+same times raised tail precision from 15.05% to 16.38%, but median terminal
+return remained negative. Different populations and sampling policies prevent
+attributing old/new result differences solely to expanding the corpus.
 
-### 4.4 上涨质量：保留失败结果
+### 4.4 Upside quality: retaining failed results
 
-同样的31特征及固定参数，拟合条件平均保持率与平均路径最大回撤：
+The same 31 features and fixed settings fitted conditional mean retention and
+mean maximum path drawdown:
 
-| 目标 | 验证MSE降幅 | 测试MSE降幅 | 预留币种降幅 |
+| Target | Validation MSE reduction | Test MSE reduction | Reserved-symbol reduction |
 |---|---:|---:|---:|
-| 保持率（U>0） | -1.30% | -0.56% | -0.85% |
-| 路径最大回撤 | -137.53% | -136.97% | -149.08% |
+| Retention (U>0) | -1.30% | -0.56% | -0.85% |
+| Maximum path drawdown | -137.53% | -136.97% | -149.08% |
 
-回撤测试误差约为条件基线2.37倍，拒绝部署。保持率重排降低下跌风险，同时损失
-正终点幅度；未通过事先约定的联合验收。不把更保守解释为更会发现暴涨。
-典型案例库有12组训练期上涨保留/冲高回吐案例，每组3个近邻困难对照；
-部分距离很大，仍是探索，不是已验证的公共采样或加权策略。
+Drawdown test error was about 2.37 times the conditional baseline; deployment was
+rejected. Retention reranking reduced downside but also sacrificed positive
+terminal amplitude, failing the predeclared joint criteria. More conservative
+selection is not better explosive-move discovery. A typical-case library contains
+12 training-period retained-rise/spike-and-reversal groups, each with three
+nearest hard controls. Some distances are large; this remains exploratory,
+not a validated public sampling or weighting strategy.
 
-### 4.5 时间粒度与背景尺度
+### 4.5 Time resolution and contextual scale
 
-固定过去24小时、未来6小时、共同起点及相同HGB设置：
+History (24 hours), horizon (six hours), origins and HGB settings were held fixed:
 
-| 表示 | 输入数 | 验证U降幅 | 测试U降幅 | 预留30币种 |
+| Representation | Inputs | Validation U reduction | Test U reduction | Reserved 30 symbols |
 |---|---:|---:|---:|---:|
-| 288个五分钟桶×6＋原31背景 | 1759 | 3.71% | 4.03% | 2.68% |
-| 24个小时桶×6＋原31背景 | 175 | 4.08% | 4.87% | 3.79% |
-| **小时桶＋小时尺度背景** | **152** | **4.83%** | **6.03%** | **5.35%** |
+| 288 five-minute buckets×6 + original 31 context | 1759 | 3.71% | 4.03% | 2.68% |
+| 24 hourly buckets×6 + original 31 context | 175 | 4.08% | 4.87% | 3.79% |
+| **Hourly buckets + hour-scaled context** | **152** | **4.83%** | **6.03%** | **5.35%** |
 
-六个通道为桶收益、桶高低区间、log1p成交额、log1p交易数、主动买入占比、有成交分钟比例。
-小时背景8项：1/6/24小时累计收益、6/24小时小时对数收益标准差(ddof=1)、
-1小时成交额相对之前6小时均值的对数比、6小时成交额加权买入占比、24小时观测比例。
-桶值float32、背景中间值float64、最终152维float32；不靠重命名或√时间换算代替重算。
+The six channels are bucket return, high/low range, log1p turnover, log1p trades,
+taker-buy share and traded-minute fraction. Eight hourly context features are
+1/6/24-hour cumulative returns, 6/24-hour standard deviations of hourly log returns
+(ddof=1), log ratio of one-hour turnover to the preceding six-hour mean, six-hour
+turnover-weighted buy share and 24-hour observed fraction. Buckets are float32,
+context intermediates float64, and final 152 inputs float32; actual recomputation
+replaces mere renaming or square-root-of-time conversion.
 
-小时背景方案验证胜出，测试三月/四月U增益5.46%/6.47%；相对五分钟方案的损失改善
-约2.09%，块区间[1.51%,2.47%]。保持率MSE仍比基线差0.81%，不部署该头。
-粒度变化同时降低维数，故无法将增益唯一归因于去噪；五分钟也不是被证明完全随机。
+Hourly context won validation. March/April test U gains were 5.46%/6.47%; loss
+improvement over the five-minute representation was about 2.09%, with block
+interval [1.51%, 2.47%]. Retention MSE remained 0.81% worse than baseline, so that
+head was not deployed. Resolution also changes dimensionality; denoising alone
+cannot be credited for the improvement, nor is five-minute behavior proven random.
 
-拟合后的等预算诊断：小时方案尾部AP0.1923，原31方案0.1764；命中17.19%对16.38%。
-小时方案选中起点上涨空间中位数2.168%、下跌空间2.337%、终点收益−0.523%。
-**绝对空间排序改善，并不等于方向或盈利改善。**
+Post-fit equal-budget diagnostics: hourly tail AP 0.1923 versus summary31 0.1764;
+precision 17.19% versus 16.38%. Hourly-selected origins had median upside 2.168%,
+downside 2.337% and terminal return −0.523%. **Better absolute-excursion ranking
+is not better direction or profitability.**
 
-## 5. 主线选择与接口
+## 5. Mainline selection and interfaces
 
-选择小时152维HGB的**单个U P90头**，从验证胜出的研究产物导出，不重新拟合后套用旧成绩。
-未提供的下跌、保持和终点输出返回null，不记0。joblib仅加载显式可信的本地文件，
-校验内容哈希、sklearn版本和特征配方；哈希是完整性证据，不是文件安全认证。
+The chosen model is the hourly 152-feature HGB's **single U P90 head**, exported
+from the validation-winning artifact without refitting and attaching old scores.
+Unavailable downside, retention and terminal outputs are null, not zero. Joblib
+loads only explicitly trusted local files, with content-hash, sklearn-version and
+feature-recipe checks. Hashes establish integrity, not file safety.
 
-当前选定模型的训练起点为UTC整点；通用扫描器从模型元数据读取此步长，
-对全盘统一锚定扫描开始时最新已完成整点，获取此前1441根分钟数据。小时并非公共接口
-的固定约束；替换模型时必须同时提供匹配的历史、聚合尺度和决策步长。
+The selected model uses UTC hourly training origins. The generic scanner reads
+this step from metadata, anchors the whole market at the latest completed hour
+at scan start, and fetches the preceding 1,441 minute bars. Hourly cadence is not
+a fixed public-interface constraint; replacement models must declare compatible
+history, aggregation and decision steps.
 
-公共入口为 `crypto-boom scan`，契约见 [公共接口](public-interfaces.md)。
-当前模型的训练、导出、发布、单标的回放迁入 [research 脚本](hourly-workflow.md)，
-不再使用公共 `crypto-boom-study train-hourly/export-hourly/report`。
-已有 acquire/audit/build/screen/rolling 研究工作流保留。新训练产物标记未评价，
-不能自动继承本文实验结论；完整尺度比较仍不是单次训练脚本的替代。
+The public entry point is `crypto-boom scan`; see [public contracts](public-interfaces.md).
+Current-model training, export, publication and single-symbol replay moved to
+[research scripts](hourly-workflow.md), replacing public
+`crypto-boom-study train-hourly/export-hourly/report`. Existing
+acquire/audit/build/screen/rolling workflows remain. Newly trained artifacts are
+unevaluated and cannot inherit this report's conclusions; a single training
+script is not a replacement for the full scale comparison.
 
-## 6. 有效性威胁与未完成工作
+## 6. Threats to validity and unfinished work
 
-1. 当前名单引入存续偏差；未覆盖所有历史退市或不可得资产。
-2. 小时机会网格可能漏掉分钟级启动；六小时训练网格未完成行情簇去重。
-3. 分位数输出不是成功概率；市场状态漂移、零活动价格和交易成本尚未充分处理。
-4. 历史时期被反复研究，不能称为未读确认；预留符号的身份划分不消除市场共同冲击。
-5. 相对异常独立输出、峰值时间与连续上涨持续性尚未训练成部署能力。
-6. 公共典型样本/困难对照选择、事件簇权重和各路径覆盖核验尚未完成。
-7. 没有足够证据支持保持率、终点方向或交易盈利；不通过无限调参掩盖负面结果。
+1. Current-list selection introduces survivorship bias and misses historical delisted/unavailable assets.
+2. Hourly opportunities may miss minute-scale onsets; six-hour training grids do not deduplicate market-event clusters.
+3. Quantiles are not success probabilities; regime drift, inactive prices and trading costs remain insufficiently addressed.
+4. Repeatedly studied periods are not unread confirmation; symbol reservation does not remove common market shocks.
+5. Separate relative-anomaly, peak-time and continuous-persistence outputs are not deployed capabilities.
+6. Public typical-case/hard-control selection, event-cluster weights and per-path coverage checks remain unfinished.
+7. Evidence does not support retention, terminal direction or trading profitability; endless tuning must not conceal failures.
 
-## 7. 复核材料与复现边界
+## 7. Review materials and reproducibility limits
 
-公共实现为 features、feature_batch、sample_pool、research/path_targets、path_screen、
-research.hourly 与 research.prediction_report；依赖版本由uv.lock固定。已有模型格式向后兼容。
-本报告使用本项目实际实验，不以外部论文替代效果证据，也未开展文献综述。
+Public implementations include features, feature_batch, sample_pool,
+research/path_targets, path_screen, research.hourly and research.hourly_cli;
+uv.lock pins dependencies. Existing model formats remain compatible. This report
+uses actual project experiments, not external papers as performance evidence;
+no literature review was conducted.
 
-机器可读摘要及原始报告哈希见 [研究证据索引](research-evidence.json)。原始文件位于
-本地 `data/path-quality-20261001/` 下的报告与 `expanded-path-v1/`；不随代码仓库发布。
-索引不是完整原始数据，外部读者没有这些本地文件时不能逐行复现本次结果。
-关键执行记录含源身份、切分、参数、失败结果、预测文件、模型文件及哈希。
-研究脚本支持从自有合法数据重新训练，但数据和人口不同的结果应单独评价。
+The [research evidence index](research-evidence.json) contains machine-readable
+summaries and original-report hashes. Originals reside locally under
+`data/path-quality-20261001/`, including `expanded-path-v1/`, and are not shipped
+with code. The index is not the full raw dataset; external readers without local
+files cannot reproduce these results row by row. Key records include source
+identities, splits, parameters, failures, predictions, models and hashes.
+Research scripts support retraining on legitimately held data, but different data
+and populations require separate evaluation.
 
-## 8. 结论
+## 8. Conclusion
 
-现阶段最合理的工程交付是一个边界清楚、来源可追踪、容易运行的绝对空间实验报告器。
-小时尺度与同步特征在既定比较中胜出；上涨质量并未随之解决。主线合并代表工程能力
-经过检查，不代表模型已获交易认证。后续研究应保留上述未完成项，而不是把单轮收尾
-写成整个研究目标已经达成。
+The appropriate current deliverable is an experimental absolute-excursion
+reporter with explicit boundaries, traceable sources and straightforward operation.
+Hourly scale and matching features won the declared comparison, without solving
+upside quality. Mainline integration means engineering behavior was checked,
+not that trading validity was established. Subsequent research must retain the
+unfinished items rather than describe one completed round as achieving the entire objective.

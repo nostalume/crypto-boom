@@ -223,7 +223,11 @@ class MonthlyArchiveProbe:
         if self.attempts <= 0:
             raise AvailabilityIntegrityError("availability attempts must be positive")
         if self.state is AvailabilityState.AVAILABLE:
-            if not _is_sha256(self.checksum_sha256) or self.http_status != 200:
+            if (
+                self.checksum_sha256 is None
+                or not _artifacts.is_sha256(self.checksum_sha256)
+                or self.http_status != 200
+            ):
                 raise AvailabilityIntegrityError("available probe identity is invalid")
         elif self.checksum_sha256 is not None:
             raise AvailabilityIntegrityError(
@@ -257,7 +261,11 @@ class ArchiveAvailabilityReport:
     probes: tuple[MonthlyArchiveProbe, ...]
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1 or not _is_sha256(self.pool_id):
+        if (
+            self.schema_version != 1
+            or self.pool_id is None
+            or not _artifacts.is_sha256(self.pool_id)
+        ):
             raise AvailabilityIntegrityError("availability report identity is invalid")
         if self.interval != "1m" or self.probed_at_ns <= 0 or not self.base_url:
             raise AvailabilityIntegrityError("availability report source is invalid")
@@ -640,12 +648,3 @@ def _next_month(month: date) -> date:
     if month.month == 12:
         return date(month.year + 1, 1, 1)
     return date(month.year, month.month + 1, 1)
-
-
-def _is_sha256(value: str | None) -> bool:
-    if value is None or not value.startswith("sha256:"):
-        return False
-    digest = value.removeprefix("sha256:")
-    return len(digest) == 64 and all(
-        character in "0123456789abcdef" for character in digest
-    )

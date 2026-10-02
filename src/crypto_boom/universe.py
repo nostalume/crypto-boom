@@ -141,7 +141,7 @@ class ResearchInstrumentPool:
             raise PoolIntegrityError("included and excluded pool symbols overlap")
         if self.observed_at_ns <= 0 or not self.source_endpoint:
             raise PoolIntegrityError("research pool source observation is invalid")
-        if not _is_sha256(self.source_payload_sha256):
+        if not _artifacts.is_sha256(self.source_payload_sha256):
             raise PoolIntegrityError("research pool source digest is invalid")
         for symbol in self.symbols:
             try:
@@ -352,12 +352,3 @@ def _write_bytes(path: Path, payload: bytes) -> None:
         _artifacts.write_exclusive_bytes(path, payload)
     except OSError as error:
         raise PoolPublicationError("pool staging write failed") from error
-
-
-def _is_sha256(value: str) -> bool:
-    digest = value.removeprefix("sha256:")
-    return (
-        value.startswith("sha256:")
-        and len(digest) == 64
-        and all(character in "0123456789abcdef" for character in digest)
-    )

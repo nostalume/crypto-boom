@@ -50,7 +50,7 @@ uv run crypto-boom-predict latest --symbol SOLUSDT \
 
 Examples use shell backslash continuation; on PowerShell use a single line or
 backticks. `python -m crypto_boom.research.predict_cli` exposes the same commands. Training
-and backtest print JSON. Latest defaults to Chinese text. Expected input/I/O
+and backtest print JSON. Latest defaults to English text. Expected input/I/O
 failures print a JSON refusal to stderr and return 2. Use a UTF-8 Windows terminal.
 
 Python consumers can load their own source without any network call:

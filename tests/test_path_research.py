@@ -201,7 +201,7 @@ def test_path_artifact_and_latest_refusal(screening, tmp_path):
     result = forecast_path(loaded, record, source, clock)
     assert len(result["dimensions"]) == 4
     assert result["model_sha256"] == saved["model_sha256"]
-    assert "成功率" in render_path_forecast(result)
+    assert "success probability" in render_path_forecast(result)
     json.dumps(result, allow_nan=False)
     with pytest.raises(ValueError, match="stale"):
         forecast_path(loaded, record, source.head(-1), clock)

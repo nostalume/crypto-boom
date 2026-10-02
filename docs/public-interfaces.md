@@ -1,42 +1,52 @@
-# 公共接口与全盘扫描契约
+# Public interfaces and whole-market scan contract
 
-## 一条主线流程
+## One main workflow
 
-`crypto-boom scan` → 读取已激活模型 → 获取交易所范围与时钟 → 全盘批量取数 →
-规范校验 → 因果特征 → 数值预测 → 完整覆盖台账及报告。
+`crypto-boom scan` → load active model → obtain venue universe and clock →
+fetch market-wide inputs → validate canonical data → compute causal features →
+predict numerical outputs → publish a complete coverage ledger and report.
 
-安装 `prediction` extra，先发布并激活可信模型（见[当前研究配方](hourly-workflow.md)）。
-随后每次只需 `uv run --extra prediction crypto-boom scan`，不传标的、hourly 或模型路径。
+Install the `prediction` extra, then publish and activate a trusted model (see the
+[current research recipe](hourly-workflow.md)). Subsequent runs need only
+`uv run --extra prediction crypto-boom scan`: no symbol, hourly designation or model path.
 
-默认全盘范围是 **Binance 现货、USDT 报价、快照时 TRADING 的现货成员**，不是全球市场，
-也不以训练中出现过的币种过滤最新范围。保留不支持的元数据、历史不足、断档和请求失败；
-这些成员没有分数，不是假阴性。不能把自然无成交直接作为坏数据，也不能填造缺失分钟。
+The default prediction universe is **Binance Spot USDT-quoted spot members with
+TRADING status at the snapshot**, not the global market. It is not restricted to
+training symbols. Unsupported metadata, insufficient history, gaps and request
+failures remain in the ledger without scores; they are not false negatives.
+Genuine no-trade periods are not automatically bad data; missing minutes must not be fabricated.
 
-## 边界与可复用能力
+## Boundaries and reusable capabilities
 
-| 所有者 | 接口 | 契约 |
+| Owner | Interface | Contract |
 |---|---|---|
-| 历史获取 | `history`、`storage`；原 archive 系列 CLI | 已声明范围的历史下载与校验，不含模型逻辑 |
-| 最新获取 | `market_data.SpotSnapshotClient.universe/bars` | 范围快照、统一时间、请求预算、精确窗口缓存 |
-| 数据清理/准入 | `bars.decode_minute_page/admit_bars` | 统一分钟表、排序、价格/成交/时间校验；拒绝而非猜测修复 |
-| 公共特征 | `features.past_sequence/SequenceRecipe/sequence_matrix` | 只看过去；由配方给出历史、聚合及窗口；不含特定模型名 |
-| 模型运行 | `model_runtime.publish_model/activate_model/load_active_model/predict_bars` | 内容寻址、显式信任、兼容检查、配方和输出语义绑定 |
-| 扫描/报告 | `config.ProjectSettings`、`market_scan.scan_market` | 全部成员、共同起点、成功/失败台账、原子发布 |
-| 研究 | `research/*` 和保留的实验 CLI | 训练、比较、选型、导出、特定模型回放，不是公共部署契约 |
+| Historical acquisition | `history`, `storage`; existing archive CLI family | Declared history download and validation, without model logic |
+| Latest acquisition | `market_data.SpotSnapshotClient.universe/bars` | Universe snapshot, shared time, request budgets, exact-window caching |
+| Source decoding | `binance_source.decode_minute_page` | Exact completed Binance REST minute pages; reject missing, duplicate or unfinished bars |
+| Cleaning/admission | `bars.admit_bars` | Source-neutral minute table, sorting, price/trade/time validation; reject rather than guess repairs |
+| Shared features | `features.past_sequence/SequenceRecipe/sequence_matrix` | Past-only inputs; recipe-owned history, aggregation and windows; no model-specific name |
+| Model runtime | `model_runtime.publish_model/activate_model/load_active_model/predict_bars` | Content addressing, explicit trust, compatibility checks, bound recipe and output semantics |
+| Scan/report | `config.ProjectSettings`, `market_scan.scan_market` | All members, common origin, success/failure ledger, atomic publication |
+| Research | `research/*` and retained experimental CLIs | Fitting, comparison, selection, export and model-specific replay; not the public deployment contract |
 
-不是任意模型插件系统。当前 `numeric-sequence-v1` 支持 1—8 个数值输出和有限历史
-序列配方（最多1440分钟），每个估计器须匹配特征数及 predict 协议。不同输入形态需要
-显式新协议与验证，不能只替换权重。公共运行层不导入研究层。
+This is not an arbitrary model-plugin system. `numeric-sequence-v1` supports 1–8
+numerical outputs and bounded historical sequence recipes (at most 1,440 minutes).
+Estimators must match the feature count and predict protocol. Different input
+forms require a new explicit protocol and validation, not just replacement
+weights. The public runtime does not import research code.
 
-## 配置和模型指派
+## Configuration and model selection
 
-项目统一配置见 [组合式数据接口](data-access.md)。复制 `crypto-boom.example.toml` 为
-`crypto-boom.toml`，以 `[data].root` 指定唯一数据根；相对路径按配置文件位置解析。
-扫描参数仍是 `[scan].workers`、`timeout_seconds`。命令可用 `--config FILE` 显式选择，
-否则向上查找项目配置；没有配置时仅在识别出的本项目根使用 `data/`，不按子目录另建数据根。
-旧 `[scan].data_dir` 已移除，请改为 `[data].root`；只保留一套项目配置。
+See [composable data access](data-access.md). Copy `crypto-boom.example.toml` to
+`crypto-boom.toml`; `[data].root` selects the single data root. Relative paths are
+resolved against that file. Scan settings remain `[scan].workers` and
+`timeout_seconds`. Commands accept `--config FILE`; otherwise configuration is
+discovered upward. Without a config, `data/` is used only at an identified project
+root, not independently in each subdirectory. Old `[scan].data_dir` was removed;
+use `[data].root` and one project configuration.
 
-`data.root/models/<内容ID>/` 保存不可变 manifest 和权重；`active.json` 是本地选择：
+`data.root/models/<content-ID>/` stores immutable manifests and weights;
+`active.json` records the local selection:
 
 ```sh
 uv run --extra prediction crypto-boom model list
@@ -44,88 +54,164 @@ uv run --extra prediction crypto-boom model activate --id MODEL_ID --trust-model
 uv run --extra prediction crypto-boom scan
 ```
 
-模型 ID 是配置/权重身份，不是研究目录路径。激活时校验来源可信性、内容哈希和环境；
-每次扫描再次校验。joblib 可以执行代码，哈希不能证明来源安全，绝不激活来历不明的模型。
-权重不随 Git 发布；换机器需搬运可信注册模型并重新显式激活。无需修改扫描源码。
-当前选择的模型及表现记录在[研究报告](path-prediction-study.md)，不写死在公共调用中。
+The model ID identifies configuration and weights, not a research path.
+Activation checks trust acknowledgment, hashes and environment; scanning checks
+them again. Joblib can execute code. Hashes establish integrity, not source safety:
+never activate untrusted models. Weights are not shipped in Git. On a new machine,
+transfer a trusted registered model and explicitly reactivate it; no scanner
+source change is needed. The [research report](path-prediction-study.md) documents
+the current selection and performance rather than hard-coding them into public calls.
 
-## 最新、缓存和预算
+## Latest data, caching and budgets
 
-先取交易所时钟，再按模型声明的决策步长取最近完成边界；所有币种使用相同边界。
-扫描途中不混入新分钟。报告列出起点、估计年龄，以及完成时是否可能已有更新起点。
-“最新”指扫描开始的共同快照，不承诺完成瞬间实时。缓存仅复用同一币种、同一起点、
-同一历史长度且哈希正确的数据；不以旧起点缓存冒充新行情。
+The scanner obtains venue time and selects the latest completed boundary according
+to the model's decision step. Every symbol uses that boundary; later minutes are
+not mixed in during scanning. Reports give the origin, estimated age and whether
+a newer origin may exist by completion. Latest means the shared snapshot at scan
+start, not real time at completion. Cache reuse requires identical symbol,
+origin, history length and valid hashes; old-origin caches cannot stand in for new data.
 
-最多2000预测成员，超限整体拒绝而不截断；最多4并发、4请求/秒、5000行情请求、900秒预算，
-另有最多3次产品元数据请求（每次最长10秒，仍受同一整轮截止时间约束），
-单请求12秒超时，已发出的请求可能在预算后才返回。使用交易所分钟权重预算的一半；
-HTTP 418/429 停止继续获取，不重试其他域名。参见
-[Binance REST 限流规范](https://developers.binance.com/en/docs/products/spot/rest-api)。
-共享IP上其他进程也消耗额度，本工具不保证不会被限流。同一数据目录建议只运行一个扫描进程。
-快照可持续增长；不自动删除审计数据，保留/清理由部署方按其审计期限管理。
+Limits: 2,000 prediction members (reject rather than truncate), four workers,
+four requests/second, 5,000 market-data requests and a 900-second budget. Up to
+three additional product-metadata requests each have a ten-second limit and share
+the overall deadline. Market requests have a twelve-second timeout; in-flight
+requests can return after the budget. The client uses half the venue's per-minute
+weight budget. HTTP 418/429 stops further fetching without retries on other
+domains. See the [Binance REST documentation](https://developers.binance.com/en/docs/products/spot/rest-api).
+Other processes on the same IP consume capacity too; avoiding rate limits is not
+guaranteed. Run only one scanner per data directory. Snapshots can keep growing:
+audit data is not automatically deleted; operators own retention and cleanup.
 
-## 报告与退出码
+## Reports and exit codes
 
-每次新建 `data.root/reports/<UTC时间-运行ID>/`：
+The public CLI configures standard Python logging at INFO, writing readable English
+progress to stderr without altering JSON stdout or report schemas. It respects
+logging handlers already installed by an embedding application. Scan logs cover
+model loading, universe discovery, metadata degradation, progress every 50 processed
+fetch/prediction results, final coverage and successful report publication. Refused
+or unattempted members remain in the final ledger; they do not each emit a log line.
+Archive ingestion, canonical materialization and model publication/activation also
+emit stage messages. Logs do not replace coverage receipts or quality checks.
 
-- `report.md`：可读摘要、排序前30预览、范围、时效和风险边界。
-- `report.json`：完整模型契约、所有成员状态、源哈希、缓存身份和预测数值。
-- `predictions.csv`：所有成功和失败成员、数据来源及产品候选，可排序；JSON/CSV 不受前30预览限制。
-- `products.csv`：四类产品的独立覆盖表，包含同名现货候选、映射状态、对应现货预测状态。
-- `exchange-info.json`：原始范围快照，可审核成员来源。
+Python library calls never configure the root logger; applications may configure
+standard logging themselves. Pure numerical feature transforms are not instrumented:
+this avoids per-row logging and unnecessary feature-code identity/cache changes.
+No automatic log files, rotation service or third-party logging dependency is added.
 
-成功状态是 `success`；失败区分 `metadata_error`、`fetch_error`、
-`data_or_prediction_error`、`not_completed`、`not_attempted`。
-退出码 0 = 范围内全员成功，2 = 部分完成（报告仍发布），1 = 启动/范围/发布失败。
-范围无法确定时不发布虚假覆盖报告。报告原子发布，原报告不覆盖。
+New report headings, explanations and warnings are in English, including the
+research prediction CLIs. Existing reports are not rewritten. Native identifiers
+and model-contract metadata remain source-faithful; readable reports use the
+output ID when a legacy model label is non-ASCII. This changes presentation, not
+model identity, prediction values or activation.
 
-P90 是条件分位数而非90%上涨概率；数值排序不等于交易建议。新上市人口可能超出训练
-覆盖，数据完整也不证明预测有效。未部署的下跌/质量头不应被读作风险为零。
+Each run creates `data.root/reports/<UTC-time-run-ID>/`:
 
-## 2026-10-01 数据处理约化
+- `report.md`: readable summary, top-30 ranking preview, scope, freshness and limitations.
+- `report.json`: full model contract, every member's status, source hashes, cache identities and predictions.
+- `predictions.csv`: all successful and failed members, input sources and product candidates; sortable and not limited to the top 30.
+- `products.csv`: separate coverage for four product categories, exact-ticker spot candidates, mapping status and linked spot prediction status.
+- `exchange-info.json`: original universe snapshot for provenance review.
 
-- 公共扫描仍为 `crypto-boom scan`，不新增管理器、插件层或模块。
-- `crypto-boom-predict` / `crypto-boom-study` 的既有命令用法保留，但实现归入
-  `research.predict_cli` / `research.study_cli`；脚本模块路径相应迁移，不保留转发壳。
-- Binance 范围选择归 `binance_source.select_spot_usdt_universe`，数据获取层不再
-  为调用这一函数导入 qualification/live 验证链。旧 qualification 函数导入点已移除。
-- `load_bar_files` 仍校验输入预算、UTC 类型和全文件哈希，但在 Parquet 扫描时筛选
-  时间窗口，不再先展开整个文件再截取。保留文件顺序、重复行和原有严格时间上界；
-  数据准入仍负责拒绝重复，读取器不会静默去重或填补。
-- 删除无调用者的固定五分钟/百万成交额选择器及未使用的 ALL_FEATURES 合集。
-  可复用因果特征仍留在公共层；模型、训练人口及阈值仍由研究拥有。
+Start with `report.md`; use JSON/CSV for complete coverage. The CLI prints the
+report directory under the configured data root.
+Older reports may predate `products.csv`; they are not rewritten retroactively.
 
-本轮不改预测算法、权重、目标或缓存格式。特征构建的代码身份变化会产生新缓存身份，
-旧缓存和历史研究证据不删除。保留单标的研究取数，因为其完成分钟/超时契约与全盘共同
-快照不同，不能仅为减少文件数强行合并。庞大的历史验证子系统尚未整体重构。
+From the project root in PowerShell, with the existing environment and active model:
 
-## 2026-10-02：交易产品池与预测数据源分离
+```powershell
+.\.venv\Scripts\crypto-boom.exe model list --config .\crypto-boom.toml
+.\.venv\Scripts\crypto-boom.exe scan --config .\crypto-boom.toml
+Get-ChildItem .\data\reports -Directory | Sort-Object Name -Descending | Select-Object -First 5
+```
 
-当前决议：接受 Binance、OKX 的 CEX 现货和永续产品；不建设 OKX K 线、成交或
-特征数据接入。OKX 仅查询产品元数据。默认延续 USDT 范围，永续与交割合约分开，
-不自动扩展到币本位合约、DEX、股票或商品类模型。
+Scanning contacts public venue endpoints and writes local snapshots and reports;
+it does not train a model or place orders. Open `report.md` inside the directory
+printed by the command. Directory order alone does not establish freshness:
+check the report's decision time and coverage status.
 
-- 行情/特征/现有模型：仍为 Binance 现货，不把现货预测描述成合约收益预测。
-- 产品池：分别保存交易所、spot/perpetual、原生产品 ID、报价/结算、合约规格及快照时间。
-- 跨市场映射：同名 ticker 仅是候选，不能自动确认资产身份；不自动去掉 `1000` 等倍率。
-  非现货产品必须先确认映射；缺少可用 Binance 现货输入时报告未覆盖，而不是零分。
-- 产品状态：公共 `live/TRADING` 不等于账户权限、充分流动性或可成交收益。
-  永续还涉及资金费、基差和清算风险，现有上行分位数模型没有预测这些风险。
+Success status is `success`; failures distinguish `metadata_error`, `fetch_error`,
+`data_or_prediction_error`, `not_completed` and `not_attempted`. Exit code 0 means
+all prediction members succeeded; 2 means partial completion with a published
+report; 1 means startup, universe or publication failure. An unknown universe
+does not produce a false coverage report. Publication is atomic and never overwrites previous reports.
 
-本机已生成四类元数据池，位于 `data/runs/cex-products-20261002/20261002T005141/`：
-Binance 现货 503，USDT 永续 528（526 COIN、2 INDEX）；OKX 加密现货 305，
-加密 USDT 线性永续 286。OKX 使用 `instCategory=1`；Binance 分类原样保留，
-不假称已经完成全部资产类型审查。数量是产品数，跨交易所、产品类型可能重叠。
+P90 is a conditional quantile, not a 90% probability of rising. Ranking is not
+trading advice. Newly listed assets may fall outside training coverage; complete
+data does not establish predictive validity. Undeployed downside/quality heads do not mean zero risk.
 
-该阶段只有研究脚本导出的 `products.csv`、元数据原文和来源哈希。
-生产 `crypto-boom scan` 现已接入元数据池，命令不变；预测覆盖分母仍是 Binance 现货。
-报告采用 `market-scan-v2`：`rows` 保留现货预测，`product_pool.products` 独立列出产品。
-`native` 只表示 Binance 现货原生对应；其他同名产品一律为 `ticker_match_unverified`，
-不据此自动执行、过滤模型人口或将分数作为合约收益预测。`no_exact_ticker_match` 不等于
-资产不存在（可能是别名/倍率），`source_unavailable` 也不等于未上市。不自动去掉倍率。
+## Trading products are separate from prediction inputs
 
-`product_metadata_status` 和预测 `status` 分开，CLI 同时输出两者；退出码仍按现货
-预测完成情况决定。产品来源失败时可以输出有效现货预测，使用产品池时必须检查前者。
-每个来源记录时间、错误或筛选数量、接收字节哈希及 base64 原文；池快照时间不冒称
-等于模型共同起点。没有缓存兜底、重试或跳域；418/429 后跳过该主机的后续产品请求。
-本轮只有产品元数据，不包含 OKX K 线/成交接口、账户权限查询、下单或资产同一性认证。
+The accepted scope includes Binance and OKX CEX spot and perpetual products.
+There is no OKX candle, trade or feature adapter: OKX supplies product metadata
+only. USDT remains the default scope; perpetuals are distinct from delivery
+futures, with no automatic extension to coin-margined contracts, DEX, equity or commodity models.
+
+- Prices, features and models remain Binance Spot-based; spot forecasts are not contract-return forecasts.
+- Products preserve venue, spot/perpetual type, native ID, quote/settlement, specifications and snapshot time.
+- Identical tickers are candidates, not verified asset identities. Multipliers such as `1000` are not stripped. Non-native mappings require verification; unavailable Binance Spot inputs mean uncovered, not a zero score.
+- Public `live/TRADING` status does not establish account permissions, liquidity or executable returns. Funding, basis and liquidation risks are not predicted by the upside-quantile model.
+
+Production `crypto-boom scan` includes the product pool;
+the prediction-coverage denominator remains Binance Spot. `market-scan-v2` keeps
+spot predictions in `rows` and products separately in `product_pool.products`.
+`native` means native Binance Spot correspondence; other exact-ticker matches are
+`ticker_match_unverified`. Candidates do not authorize execution, filter the
+model population or turn scores into contract-return predictions.
+`no_exact_ticker_match` does not prove absence (aliases/multipliers may exist),
+and `source_unavailable` does not mean unlisted.
+
+`product_metadata_status` is separate from prediction `status`; the CLI prints
+both. Exit codes still follow spot prediction completion. Valid spot forecasts
+can be published despite product-source failures; product-pool consumers must
+check metadata status. Each source records time, errors or filtering counts,
+received-byte hashes and base64 source bytes. Pool snapshot time is not claimed
+to equal the model origin. There is no cache fallback, retry or domain switching;
+418/429 skips subsequent product requests to that host. This adds no OKX market-data
+adapter, account query, order placement or asset-identity certification.
+
+## Optional inference input evidence
+
+```sh
+uv run --extra prediction crypto-boom scan --record-inputs --config crypto-boom.toml
+```
+
+This opt-in operation records inputs, not drift conclusions. Default scans retain
+`market-scan-v2`; opted-in scans write `market-scan-v3` with independent
+`input_evidence` status in JSON, Markdown and CLI JSON stdout. Prediction exit codes
+remain based on prediction coverage, not optional evidence availability.
+
+`model_runtime.predict_bars(..., include_inputs=False)` retains its existing
+prediction-value dictionary. With `include_inputs=True`, it returns an envelope:
+`values` contains that same dictionary; `inputs` contains `state`, `reason` and a
+read-only NumPy `vector` (or `None`). Features are computed once; the copy preserves
+the actual dtype and feature order. Runtime performs no IO. If an estimator mutates
+shared input, evidence is unavailable without changing normal numerical execution.
+No particular cadence, feature count or prediction target is fixed by this API.
+
+`scan_market(settings, record_inputs=True)` retains at most 16 MB of raw vectors;
+this is not a total process-memory limit. Additional vectors are refused with
+`input_budget_exceeded` while scores remain. Every successful prediction has a
+per-member evidence state. Failed predictions do not imply captured inputs.
+
+When available, `inputs.parquet` contains symbol, decision time, snapshot cache ID,
+source SHA256 and a fixed-width typed feature vector. `report.json` binds its hash,
+size, dtype, feature count, row count, model/recipe identity and runtime/feature/bar
+code hashes. The report and sidecar share the existing atomic publication directory;
+no circular report/sidecar hash dependency is introduced. Verify the hash and
+metadata before use; hashes establish integrity, not authenticity. Evidence status:
+
+- `complete`: every successful prediction has captured input evidence.
+- `partial`: only some successful predictions have evidence.
+- `unavailable`: no usable sidecar; consult per-member and publication reasons.
+
+Optional writing failure removes partial sidecar bytes and records unavailability,
+while preserving prediction results if the main report can still be written.
+Cleanup failure, cancellation or main report failure aborts publication; there is
+no guarantee of successful reporting on an unusable filesystem. Files are not
+updated after publication. Logs use the existing English stderr logging mechanism.
+
+These are deployment observations, not automatically a training reference or a
+representative market sample. Reference-window choice, drift statistics, thresholds
+and model-update policy belong to research. No automatic retention, training,
+alarm service or activation is added. Readers of old v1/v2 scan reports must treat
+absent evidence as unavailable, never reconstruct and label it original capture.

@@ -7,12 +7,12 @@ from datetime import UTC, datetime
 import numpy as np
 import polars as pl
 import sklearn
-from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_pinball_loss
 from threadpoolctl import threadpool_limits
 
 from crypto_boom.bars import MINUTE_US, admit_bars
 from crypto_boom.features import iter_feature_segments
+from crypto_boom.research._estimators import path_regressor
 from crypto_boom.research.forward import (
     DEFAULT_GRID,
     FEATURES,
@@ -72,16 +72,7 @@ def fit_forward(
         for h in grid.horizons:
             y = train[f"up_{h}"].to_numpy()
             for q in grid.quantiles:
-                model = HistGradientBoostingRegressor(
-                    loss="quantile",
-                    quantile=q,
-                    max_iter=80,
-                    max_leaf_nodes=15,
-                    min_samples_leaf=50,
-                    learning_rate=0.08,
-                    early_stopping=False,
-                    random_state=0,
-                ).fit(x_train, y)
+                model = path_regressor(q, max_iter=80).fit(x_train, y)
                 models.append(model)
                 baselines.append(float(np.quantile(y, q)))
     evaluation = evaluate_rows(candidate_valid, models, baselines, grid)

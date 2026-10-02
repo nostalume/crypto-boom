@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path, PureWindowsPath
@@ -24,6 +26,16 @@ def canonical_json(payload: dict[str, object]) -> bytes:
 
 def content_id(payload: dict[str, object]) -> str:
     return _SHA256_PREFIX + hashlib.sha256(canonical_json(payload)).hexdigest()
+
+
+def is_sha256(value: str) -> bool:
+    """Recognize canonical, lowercase SHA256 content identities, not raw hashes."""
+    digest = value.removeprefix(_SHA256_PREFIX)
+    return (
+        value.startswith(_SHA256_PREFIX)
+        and len(digest) == 64
+        and all(character in "0123456789abcdef" for character in digest)
+    )
 
 
 def write_exclusive_bytes(path: Path, payload: bytes) -> None:
@@ -49,17 +61,32 @@ def adopt_directory(
     *,
     verify_existing: Callable[[Path], None],
 ) -> bool:
-    if target.exists():
-        verify_existing(target)
-        return True
-    try:
-        os.replace(staging, target)
-    except OSError:
-        if not target.exists():
-            raise
-        verify_existing(target)
-        return True
-    return False
+    """Adopt atomically; verify race winners; bound transient Windows recovery."""
+    delays = (0.05, 0.1, 0.2)
+    for attempt in range(len(delays) + 1):
+        if target.exists():
+            verify_existing(target)
+            return True
+        try:
+            os.replace(staging, target)
+        except OSError as exc:
+            if target.exists():
+                verify_existing(target)
+                return True
+            if getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == len(
+                delays
+            ):
+                raise
+            logging.getLogger(__name__).warning(
+                "Publication refused (Windows %s); bounded retry %d/3: %s",
+                exc.winerror,
+                attempt + 1,
+                target,
+            )
+            time.sleep(delays[attempt])
+        else:
+            return False
+    raise AssertionError("unreachable publication attempt")
 
 
 @contextmanager

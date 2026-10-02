@@ -10,7 +10,8 @@ from urllib.request import urlopen
 
 import polars as pl
 
-from crypto_boom.bars import admit_bars, decode_minute_page
+from crypto_boom.bars import admit_bars
+from crypto_boom.binance_source import decode_minute_page
 
 BASE_URL = "https://data-api.binance.vision"
 

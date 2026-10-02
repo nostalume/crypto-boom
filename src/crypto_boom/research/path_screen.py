@@ -9,13 +9,13 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 import sklearn
-from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_pinball_loss
 from threadpoolctl import threadpool_limits
 
 from crypto_boom import _artifacts
 from crypto_boom.bars import MINUTE_US
 from crypto_boom.feature_batch import BATCH_FEATURES, FEATURE_GROUPS
+from crypto_boom.research._estimators import path_regressor
 
 
 def _scores(y: np.ndarray, pred: np.ndarray, q: float) -> dict:
@@ -132,6 +132,20 @@ def screen_path_features(
         np.quantile(train["volatility_360"].to_numpy(), [0.25, 0.5, 0.75])
     )
     train_bins = np.searchsorted(edges, train["volatility_360"].to_numpy())
+    evaluation_inputs = {}
+    for name, frame in (("selection", selection), ("test", test)):
+        # Greedy nonoverlapping windows per symbol, not independent across symbols.
+        mask = np.zeros(len(frame), dtype=bool)
+        last: dict[str, int] = {}
+        for i, (symbol, at) in enumerate(
+            frame.select("symbol", "decision_us").iter_rows()
+        ):
+            if at > last.get(symbol, -(2**63)) + horizon * MINUTE_US:
+                mask[i] = True
+                last[symbol] = at
+        symbols = frame["symbol"].to_numpy()
+        bins = np.searchsorted(edges, frame["volatility_360"].to_numpy())
+        evaluation_inputs[name] = (symbols, bins, mask)
     chosen, responses = {}, []
     with threadpool_limits(limits=2):
         for label, q in coordinates:
@@ -152,16 +166,9 @@ def screen_path_features(
             best_loss = float("inf")
             best_features = ()
             for group, columns in groups:
-                model = HistGradientBoostingRegressor(
-                    loss="quantile",
-                    quantile=q,
-                    max_iter=max_iter,
-                    max_leaf_nodes=15,
-                    min_samples_leaf=50,
-                    learning_rate=0.08,
-                    early_stopping=False,
-                    random_state=0,
-                ).fit(train.select(columns).to_numpy(), y_train)
+                model = path_regressor(q, max_iter=max_iter).fit(
+                    train.select(columns).to_numpy(), y_train
+                )
                 metrics = _scores(
                     y_selection, model.predict(selection.select(columns).to_numpy()), q
                 )
@@ -180,27 +187,13 @@ def screen_path_features(
                 baselines = {
                     "fixed": np.full(len(frame), fixed),
                     "symbol": np.array(
-                        [symbol_q.get(s, fixed) for s in frame["symbol"]]
+                        [symbol_q.get(s, fixed) for s in evaluation_inputs[name][0]]
                     ),
                     "volatility": np.array(
-                        [
-                            bin_q.get(int(i), fixed)
-                            for i in np.searchsorted(
-                                edges, frame["volatility_360"].to_numpy()
-                            )
-                        ]
+                        [bin_q.get(int(i), fixed) for i in evaluation_inputs[name][1]]
                     ),
                 }
-                # Greedy nonoverlapping windows per symbol, not independent across symbols.
-                mask = np.zeros(len(frame), dtype=bool)
-                last: dict[str, int] = {}
-                for i, (symbol, at) in enumerate(
-                    frame.select("symbol", "decision_us").iter_rows()
-                ):
-                    if at > last.get(symbol, -(2**63)) + horizon * MINUTE_US:
-                        mask[i] = True
-                        last[symbol] = at
-                symbols = frame["symbol"].to_numpy()
+                symbols, _, mask = evaluation_inputs[name]
                 evaluations[name] = {
                     **_comparison(y, pred, baselines, q),
                     "horizon_spaced": _comparison(

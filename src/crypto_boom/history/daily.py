@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import os
+import logging
 import re
 import zipfile
 from asyncio import sleep
@@ -20,6 +20,7 @@ import msgspec
 
 from crypto_boom import _artifacts
 from crypto_boom.binance_source import BINANCE_SPOT
+from crypto_boom.history._transport import download_file
 from crypto_boom.history.codec import (
     DECODER_VERSION,
     ArchiveBatchError,
@@ -293,6 +294,9 @@ async def acquire_archive_day(
 ) -> PublishedArchive:
     """Download, validate, and atomically publish one official archive revision."""
 
+    logging.getLogger(__name__).info(
+        "Acquiring daily archive: %s %s", request.instrument.symbol, request.day
+    )
     output_root = output_root.resolve()
     _prepare_archive_root(output_root)
     timeout = aiohttp.ClientTimeout(total=limits.request_timeout_seconds)
@@ -436,7 +440,7 @@ async def _acquire_archive_day_with_session(
         staging_parent, prefix="arc-"
     ) as staging:
         archive_path = staging / request.archive_filename
-        actual_sha256, compressed_bytes = await _download_file(
+        actual_sha256, compressed_bytes = await download_file(
             session,
             source_url,
             archive_path,
@@ -634,43 +638,8 @@ async def _download_bytes(
                 if len(payload) > maximum:
                     raise ArchiveTransportError("archive response exceeds byte limit")
             return bytes(payload)
-    except ArchiveError:
-        raise
     except (TimeoutError, aiohttp.ClientError) as error:
         raise ArchiveTransportError("archive request failed") from error
-
-
-async def _download_file(
-    session: aiohttp.ClientSession,
-    url: str,
-    destination: Path,
-    *,
-    maximum: int,
-    chunk_bytes: int,
-) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    try:
-        async with session.get(url) as response:
-            _admit_response(response, maximum=maximum)
-            with destination.open("xb") as stream:
-                async for chunk in response.content.iter_chunked(chunk_bytes):
-                    size += len(chunk)
-                    if size > maximum:
-                        raise ArchiveTransportError(
-                            "archive response exceeds byte limit"
-                        )
-                    digest.update(chunk)
-                    stream.write(chunk)
-                stream.flush()
-                os.fsync(stream.fileno())
-    except ArchiveError:
-        raise
-    except (TimeoutError, aiohttp.ClientError) as error:
-        raise ArchiveTransportError("archive request failed") from error
-    except OSError as error:
-        raise ArchivePublicationError("archive staging write failed") from error
-    return digest.hexdigest(), size
 
 
 def _admit_response(response: aiohttp.ClientResponse, *, maximum: int) -> None:
@@ -873,8 +842,6 @@ def _publish_directory(
                 existing, expected_manifest
             ),
         )
-    except ArchiveError:
-        raise
     except OSError as error:
         raise ArchivePublicationError("atomic archive publication failed") from error
 
@@ -904,8 +871,6 @@ def _hash_published_archive(path: Path, *, maximum: int) -> tuple[str, int]:
                         "published archive exceeds the byte limit"
                     )
                 digest.update(chunk)
-    except ArchiveError:
-        raise
     except OSError as error:
         raise ArchivePublicationError("published archive is unavailable") from error
     return digest.hexdigest(), size

@@ -12,6 +12,7 @@ from uuid import UUID
 
 import pytest
 
+from crypto_boom import _operations_cli as operations
 from crypto_boom import cli
 from crypto_boom.history.availability import (
     ArchiveAvailabilityReport,
@@ -31,6 +32,45 @@ from crypto_boom.universe import (
 )
 
 FIXED_RUN_ID = UUID("4b0de96f-c5c9-40ce-9747-b558f84821bb")
+
+
+@pytest.mark.parametrize("command, expected", [(["model", "list"], 0), (["scan"], 1)])
+def test_prediction_commands_do_not_load_historical_operations(
+    tmp_path: Path, command: list[str], expected: int
+) -> None:
+    config = tmp_path / "crypto-boom.toml"
+    config.write_text('[data]\nroot = "data"\n', encoding="utf-8")
+    code = textwrap.dedent(
+        """
+        import sys
+        from crypto_boom.cli import main
+
+        command, expected, config = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+        args = ["model", "list"] if command == "model" else ["scan"]
+        assert main([*args, "--config", config]) == expected
+        forbidden = (
+            "crypto_boom._operations_cli", "crypto_boom.history",
+            "crypto_boom.qualification", "crypto_boom.live",
+            "crypto_boom.universe", "crypto_boom.research",
+        )
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in sys.modules for prefix in forbidden
+        )
+        if command == "model":
+            assert not any(name in sys.modules for name in ("numpy", "polars", "sklearn"))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, command[0], str(expected), str(config)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "INFO crypto_boom.cli: Starting" in result.stderr
+    if command[0] == "model":
+        assert json.loads(result.stdout) == {"models": [], "active": None}
 
 
 def _archive_manifest(
@@ -118,7 +158,7 @@ def test_smoke_emits_machine_readable_run_context(
 ) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("schema_version = 1\n", encoding="utf-8")
-    monkeypatch.setattr(cli, "uuid4", lambda: FIXED_RUN_ID)
+    monkeypatch.setattr(operations, "uuid4", lambda: FIXED_RUN_ID)
 
     exit_code = cli.main(["smoke", "--config", str(config_path)])
 
@@ -219,8 +259,8 @@ def test_archive_day_emits_published_manifest_identity(
             already_present=False,
         )
 
-    monkeypatch.setattr(cli, "acquire_archive_day", fake_acquire)
-    monkeypatch.setattr(cli, "uuid4", lambda: FIXED_RUN_ID)
+    monkeypatch.setattr(operations, "acquire_archive_day", fake_acquire)
+    monkeypatch.setattr(operations, "uuid4", lambda: FIXED_RUN_ID)
 
     exit_code = cli.main(
         [
@@ -291,8 +331,8 @@ def test_archive_range_emits_partition_progress_and_summary(
             callback(publication)
         return ArchiveRangeResult(publications)
 
-    monkeypatch.setattr(cli, "acquire_archive_range", fake_acquire)
-    monkeypatch.setattr(cli, "uuid4", lambda: FIXED_RUN_ID)
+    monkeypatch.setattr(operations, "acquire_archive_range", fake_acquire)
+    monkeypatch.setattr(operations, "uuid4", lambda: FIXED_RUN_ID)
 
     exit_code = cli.main(
         [
@@ -349,9 +389,9 @@ def test_archive_range_accepts_a_verified_pool_artifact(
         received["request"] = args[0]
         return ArchiveRangeResult(())
 
-    monkeypatch.setattr(cli, "load_published_research_pool", lambda path: pool)
-    monkeypatch.setattr(cli, "acquire_archive_range", fake_acquire)
-    monkeypatch.setattr(cli, "uuid4", lambda: FIXED_RUN_ID)
+    monkeypatch.setattr(operations, "load_published_research_pool", lambda path: pool)
+    monkeypatch.setattr(operations, "acquire_archive_range", fake_acquire)
+    monkeypatch.setattr(operations, "uuid4", lambda: FIXED_RUN_ID)
 
     exit_code = cli.main(
         [
@@ -388,8 +428,8 @@ def test_instrument_pool_publishes_current_observed_selection(
         received.update(kwargs)
         return published
 
-    monkeypatch.setattr(cli, "_capture_research_pool", fake_capture)
-    monkeypatch.setattr(cli, "uuid4", lambda: FIXED_RUN_ID)
+    monkeypatch.setattr(operations, "_capture_research_pool", fake_capture)
+    monkeypatch.setattr(operations, "uuid4", lambda: FIXED_RUN_ID)
 
     exit_code = cli.main(
         [
@@ -463,7 +503,7 @@ def test_archive_availability_emits_an_inspectable_summary(
         received.update(kwargs)
         return published
 
-    monkeypatch.setattr(cli, "_audit_archive_availability", fake_audit)
+    monkeypatch.setattr(operations, "_audit_archive_availability", fake_audit)
 
     exit_code = cli.main(
         [
@@ -563,12 +603,12 @@ def test_archive_monthly_consumes_verified_availability_and_emits_progress(
         return result
 
     monkeypatch.setattr(
-        cli,
+        operations,
         "load_published_archive_availability",
         lambda path: report,
     )
-    monkeypatch.setattr(cli, "acquire_monthly_archives", fake_acquire)
-    monkeypatch.setattr(cli, "uuid4", lambda: FIXED_RUN_ID)
+    monkeypatch.setattr(operations, "acquire_monthly_archives", fake_acquire)
+    monkeypatch.setattr(operations, "uuid4", lambda: FIXED_RUN_ID)
 
     exit_code = cli.main(
         [
@@ -606,7 +646,7 @@ def test_archive_monthly_consumes_verified_availability_and_emits_progress(
     assert received["report"] == report
     assert received["symbols"] == ("ETHUSDT",)
     limits = received["limits"]
-    assert isinstance(limits, cli.MonthlyArchiveLimits)
+    assert isinstance(limits, operations.MonthlyArchiveLimits)
     assert limits.maximum_archives == 1
     assert limits.maximum_concurrency == 2
     assert limits.maximum_total_compressed_bytes == 4096
@@ -639,11 +679,11 @@ def test_historical_coverage_dispatches_verified_offline_inputs(
         return published
 
     monkeypatch.setattr(
-        cli,
+        operations,
         "load_published_archive_availability",
         lambda path: availability,
     )
-    monkeypatch.setattr(cli, "build_historical_coverage", fake_build)
+    monkeypatch.setattr(operations, "build_historical_coverage", fake_build)
 
     exit_code = cli.main(
         [
@@ -668,7 +708,7 @@ def test_historical_coverage_dispatches_verified_offline_inputs(
     assert received["availability"] == availability
     assert received["symbols"] == ("ETHUSDT",)
     limits = received["limits"]
-    assert isinstance(limits, cli.CoverageLimits)
+    assert isinstance(limits, operations.CoverageLimits)
     assert limits.maximum_archives == 1
 
 
@@ -711,11 +751,11 @@ def test_research_corpus_dispatches_bounded_offline_materialization(
         return result
 
     monkeypatch.setattr(
-        cli,
+        operations,
         "load_published_archive_availability",
         lambda path: availability,
     )
-    monkeypatch.setattr(cli, "materialize_research_corpus", fake_materialize)
+    monkeypatch.setattr(operations, "materialize_research_corpus", fake_materialize)
 
     exit_code = cli.main(
         [
@@ -759,7 +799,7 @@ def test_research_corpus_dispatches_bounded_offline_materialization(
     assert received["symbols"] == ("ETHUSDT",)
     assert received["excluded"] == frozenset({("REDUSDT", "2025-03")})
     limits = received["limits"]
-    assert isinstance(limits, cli.ResearchCorpusLimits)
+    assert isinstance(limits, operations.ResearchCorpusLimits)
     assert limits.maximum_archives == 1
     assert limits.maximum_rows == 2
     assert limits.maximum_source_uncompressed_bytes == 4096
@@ -777,7 +817,7 @@ def test_qualify_live_service_dispatches_without_bounded_duration(
 
     async def fake_service(**kwargs: object) -> tuple[object, ...]:
         received.update(kwargs)
-        cli._emit_json(
+        operations._emit_json(
             {
                 "event": "service_status",
                 "phase": "stopped",
@@ -787,8 +827,8 @@ def test_qualify_live_service_dispatches_without_bounded_duration(
         )
         return ()
 
-    monkeypatch.setattr(cli, "_qualify_live_service", fake_service)
-    monkeypatch.setattr(cli, "uuid4", lambda: FIXED_RUN_ID)
+    monkeypatch.setattr(operations, "_qualify_live_service", fake_service)
+    monkeypatch.setattr(operations, "uuid4", lambda: FIXED_RUN_ID)
 
     exit_code = cli.main(
         [
@@ -830,7 +870,7 @@ def test_shutdown_signal_stops_a_real_child_process() -> None:
         """
         import asyncio
 
-        from crypto_boom.cli import _install_shutdown_signals
+        from crypto_boom._operations_cli import _install_shutdown_signals
 
 
         async def main() -> None:

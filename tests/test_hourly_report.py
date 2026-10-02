@@ -19,8 +19,7 @@ from crypto_boom.research.hourly import (
     load_hourly_model,
     save_hourly_model,
 )
-from crypto_boom.research.hourly_cli import main
-from crypto_boom.research.prediction_report import generate_prediction_report
+from crypto_boom.research.hourly_cli import generate_prediction_report, main
 from test_forward_prediction import BASE, bars
 
 
@@ -98,6 +97,8 @@ def test_report_live_and_replay_same_hour(model_directory, tmp_path, monkeypatch
     assert replay["mode"] == "historical_replay"
     assert replay["downside_forecast"] is None
     assert (tmp_path / "replay/report.md").is_file()
+    prose = (tmp_path / "replay/report.md").read_text(encoding="utf-8")
+    assert prose.isascii() and "experimental prediction report" in prose
     assert (
         json.loads((tmp_path / "replay/prediction.json").read_text(encoding="utf-8"))[
             "upside_p90"

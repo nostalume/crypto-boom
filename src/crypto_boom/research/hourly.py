@@ -19,6 +19,7 @@ from threadpoolctl import threadpool_limits
 from crypto_boom import _artifacts
 from crypto_boom.bars import MINUTE_US, admit_bars, load_bar_files
 from crypto_boom.features import SEQUENCE_CHANNELS, SequenceRecipe, sequence_matrix
+from crypto_boom.research._estimators import path_regressor
 
 HOURLY_CONTEXT = (
     "return_1h",
@@ -202,16 +203,7 @@ def fit_hourly_dataset(
             ys.append(kept["up_360"].to_numpy())
     if not ys or sum(len(y) for y in ys) < 100:
         raise ValueError("insufficient complete 24-hour history")
-    model = HistGradientBoostingRegressor(
-        loss="quantile",
-        quantile=0.9,
-        max_iter=60,
-        max_leaf_nodes=15,
-        min_samples_leaf=50,
-        learning_rate=0.08,
-        early_stopping=False,
-        random_state=0,
-    )
+    model = path_regressor(0.9, max_iter=60)
     with threadpool_limits(limits=2):
         model.fit(np.concatenate(xs), np.concatenate(ys))
     return save_hourly_model(
@@ -257,5 +249,5 @@ def forecast_hourly(
         "retention_forecast": None,
         "downside_forecast": None,
         "terminal_return_forecast": None,
-        "interpretation": "未来六小时分钟收盘路径最大上涨幅度的P90估计;不是90%上涨概率或保证收益。",
+        "interpretation": "P90 of maximum minute-close upside over six hours, not a 90% rise probability or guaranteed return.",
     }

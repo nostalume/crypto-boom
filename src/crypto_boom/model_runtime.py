@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import warnings
@@ -118,6 +119,9 @@ def publish_model(
             load_model(registry, model_id, trusted=True)
         else:
             staging.rename(target)
+    logging.getLogger(__name__).info(
+        "Model published: %s (activation unchanged)", model_id
+    )
     return manifest
 
 
@@ -160,6 +164,7 @@ def activate_model(registry: Path, model_id: str, *, trusted: bool = False) -> N
             _artifacts.canonical_json({"model_id": model_id, "trusted": True})
         )
         os.replace(temporary, registry / "active.json")
+        logging.getLogger(__name__).info("Model activated: %s", model_id)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -179,7 +184,12 @@ def load_active_model(registry: Path) -> tuple[dict, dict, SequenceRecipe]:
 
 
 def predict_bars(
-    models: dict, record: dict, source: pl.DataFrame, *, decision_us: int
+    models: dict,
+    record: dict,
+    source: pl.DataFrame,
+    *,
+    decision_us: int,
+    include_inputs: bool = False,
 ) -> dict:
     """Predict one member at the run's common completed decision time."""
     identity = record["identity"]
@@ -188,11 +198,29 @@ def predict_bars(
         raise ValueError("decision does not match model cadence")
     keys = pl.DataFrame({"symbol": [source["symbol"][0]], "decision_us": [decision_us]})
     matrix = sequence_matrix(source, keys, recipe)
+    inputs = matrix.copy() if include_inputs else None
+    unchanged = True
     result = {}
     with threadpool_limits(limits=2):
         for name, estimator in models.items():
+            if inputs is not None:
+                unchanged = unchanged and np.array_equal(matrix, inputs)
             prediction = np.asarray(estimator.predict(matrix))
             if prediction.shape != (1,) or not np.isfinite(prediction).all():
                 raise ValueError("invalid numeric prediction")
             result[name] = float(prediction[0])
+            if inputs is not None:
+                unchanged = unchanged and np.array_equal(matrix, inputs)
+    if inputs is not None:
+        vector = inputs[0] if unchanged else None
+        if vector is not None:
+            vector.setflags(write=False)
+        return {
+            "values": result,
+            "inputs": {
+                "state": "available" if unchanged else "unavailable",
+                "reason": None if unchanged else "estimator_mutated_input",
+                "vector": vector,
+            },
+        }
     return result

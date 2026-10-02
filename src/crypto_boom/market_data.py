@@ -13,11 +13,12 @@ import aiohttp
 import polars as pl
 
 from crypto_boom import _artifacts
-from crypto_boom.bars import MINUTE_US, admit_bars, decode_minute_page
+from crypto_boom.bars import MINUTE_US, admit_bars
 from crypto_boom.binance_source import (
     PUBLIC_REST_BASE,
     RestWeightBudget,
     decode_exchange_info,
+    decode_minute_page,
     sampled_receipt,
     select_spot_usdt_universe,
 )
@@ -206,8 +207,26 @@ class SpotSnapshotClient:
                 (staging / "receipt.json").write_bytes(
                     _artifacts.canonical_json(receipt)
                 )
-                staging.rename(target)
-            reused = False
+
+                def verify_existing(directory: Path) -> None:
+                    if (directory / "receipt.json").stat().st_size > 4096 or (
+                        directory / "bars.parquet"
+                    ).stat().st_size > 2_000_000:
+                        raise ValueError("source cache exceeds size budget")
+                    if (
+                        directory / "receipt.json"
+                    ).read_bytes() != _artifacts.canonical_json(
+                        receipt
+                    ) or _artifacts.file_identity(directory / "bars.parquet")[
+                        0
+                    ] != receipt["sha256"]:
+                        raise ValueError(
+                            "concurrent source cache identity/hash mismatch"
+                        )
+
+                reused = _artifacts.adopt_directory(
+                    staging, target, verify_existing=verify_existing
+                )
         times = frame["open_time"].dt.epoch("us")
         if (
             len(frame) != history_minutes + 1

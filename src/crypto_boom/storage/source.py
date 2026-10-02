@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
@@ -168,13 +169,13 @@ class ResearchPartitionManifest:
             ) from error
         if month.strftime("%Y-%m") != self.month:
             raise ResearchStorageIntegrityError("research partition month is invalid")
-        if not _is_digest(self.source_manifest_id) or not _is_digest(
-            self.source_revision
-        ):
+        if not _artifacts.is_sha256(
+            self.source_manifest_id
+        ) or not _artifacts.is_sha256(self.source_revision):
             raise ResearchStorageIntegrityError(
                 "research partition source identity is invalid"
             )
-        if not _is_digest(self.parquet_sha256):
+        if not _artifacts.is_sha256(self.parquet_sha256):
             raise ResearchStorageIntegrityError(
                 "research partition Parquet identity is invalid"
             )
@@ -261,6 +262,7 @@ def materialize_research_corpus(
     would make an availability observation that is not true.
     """
 
+    logging.getLogger(__name__).info("Materializing canonical archive partitions")
     if report.unresolved_count:
         raise ResearchStorageIntegrityError(
             "research corpus cannot consume unresolved availability observations"
@@ -369,6 +371,9 @@ def materialize_research_corpus(
             admitted_parquet_bytes += publication.manifest.parquet_bytes
             if on_published is not None:
                 on_published(publication)
+    logging.getLogger(__name__).info(
+        "Canonical materialization complete: %d partitions", len(publications)
+    )
     return ResearchCorpusResult(
         report.report_id,
         tuple(publications),
@@ -777,15 +782,6 @@ def _file_identity(path: Path) -> tuple[str, int]:
         raise ResearchStoragePublicationError(
             "research partition file is unavailable"
         ) from error
-
-
-def _is_digest(value: str) -> bool:
-    if not value.startswith(_SHA256_PREFIX):
-        return False
-    digest = value.removeprefix(_SHA256_PREFIX)
-    return len(digest) == 64 and all(
-        character in "0123456789abcdef" for character in digest
-    )
 
 
 @dataclass(frozen=True)

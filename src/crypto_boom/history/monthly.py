@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import logging
 import multiprocessing as mp
-import os
 import zipfile
 from asyncio import (
     CancelledError,
@@ -29,6 +29,7 @@ import msgspec
 
 from crypto_boom import _artifacts
 from crypto_boom.binance_source import BINANCE_SPOT
+from crypto_boom.history._transport import download_file
 from crypto_boom.history.availability import (
     ArchiveAvailabilityReport,
     AvailabilityState,
@@ -231,7 +232,7 @@ class MonthlyArchiveManifest:
         if self.interval != "1m" or self.dataset != "klines":
             raise ArchiveIntegrityError("monthly archive manifest dataset is invalid")
         digests = self.source_revision, self.archive_sha256, self.member_sha256
-        if any(not _is_prefixed_digest(value) for value in digests):
+        if any(not _artifacts.is_sha256(value) for value in digests):
             raise ArchiveIntegrityError("monthly archive manifest digest is invalid")
         if (
             self.compressed_bytes <= 0
@@ -403,6 +404,9 @@ async def acquire_monthly_archives(
             f"monthly acquisition has {len(requests)} archives; "
             f"limit is {limits.maximum_archives}"
         )
+    logging.getLogger(__name__).info(
+        "Monthly acquisition: %d selected archives", len(requests)
+    )
     if not requests:
         return MonthlyArchiveBatchResult(report.report_id, ())
 
@@ -483,6 +487,14 @@ async def acquire_monthly_archives(
                             first_error = grouped_request, result
                         continue
                     publications.append(result)
+                    logging.getLogger(__name__).info(
+                        "Monthly acquisition progress: %d/%d; %s %s reused=%s",
+                        len(publications),
+                        len(requests),
+                        result.manifest.symbol,
+                        result.manifest.month,
+                        result.already_present,
+                    )
                     admitted_compressed_bytes += result.manifest.compressed_bytes
                     if on_published is not None:
                         on_published(result)
@@ -716,12 +728,14 @@ async def _acquire_one(
         prefix="monthly-archive-",
     ) as staging:
         archive_path = staging / request.archive_filename
-        archive_sha256, compressed_bytes = await _download_file(
+        archive_sha256, compressed_bytes = await download_file(
             session,
             request.source_url,
             archive_path,
             maximum=maximum_compressed_bytes,
             chunk_bytes=limits.chunk_bytes,
+            description="monthly archive",
+            limit_description="monthly archive",
         )
         if archive_sha256 != request.expected_sha256:
             raise ArchiveIntegrityError(
@@ -772,47 +786,6 @@ async def _acquire_one(
             report.report_id,
             already_present,
         )
-
-
-async def _download_file(
-    session: aiohttp.ClientSession,
-    url: str,
-    destination: Path,
-    *,
-    maximum: int,
-    chunk_bytes: int,
-) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    try:
-        async with session.get(url) as response:
-            if response.status != 200:
-                raise ArchiveTransportError(
-                    "monthly archive endpoint returned a non-success status"
-                )
-            if (
-                response.content_length is not None
-                and response.content_length > maximum
-            ):
-                raise ArchiveTransportError("monthly archive exceeds byte limit")
-            with destination.open("xb") as stream:
-                async for chunk in response.content.iter_chunked(chunk_bytes):
-                    size += len(chunk)
-                    if size > maximum:
-                        raise ArchiveTransportError(
-                            "monthly archive exceeds byte limit"
-                        )
-                    digest.update(chunk)
-                    stream.write(chunk)
-                stream.flush()
-                os.fsync(stream.fileno())
-    except ArchiveError:
-        raise
-    except (TimeoutError, aiohttp.ClientError) as error:
-        raise ArchiveTransportError("monthly archive request failed") from error
-    except OSError as error:
-        raise ArchivePublicationError("monthly archive staging write failed") from error
-    return digest.hexdigest(), size
 
 
 def _inspect_archive(
@@ -1136,8 +1109,8 @@ def _read_acquisition(path: Path) -> _Acquisition:
             "wall_time_unit": "ns",
         }
         if (
-            not _is_prefixed_digest(acquisition.availability_report_id)
-            or not _is_prefixed_digest(acquisition.pool_id)
+            not _artifacts.is_sha256(acquisition.availability_report_id)
+            or not _artifacts.is_sha256(acquisition.pool_id)
             or payload != _artifacts.canonical_json(expected)
         ):
             raise ValueError
@@ -1189,8 +1162,6 @@ def _publish_directory(
                 existing, expected_manifest
             ),
         )
-    except ArchiveError:
-        raise
     except OSError as error:
         raise ArchivePublicationError(
             "atomic monthly archive publication failed"
@@ -1220,8 +1191,6 @@ def _hash_file(path: Path, *, maximum: int) -> tuple[str, int]:
                         "published monthly archive exceeds byte limit"
                     )
                 digest.update(chunk)
-    except ArchiveError:
-        raise
     except OSError as error:
         raise ArchivePublicationError("monthly archive is unavailable") from error
     return digest.hexdigest(), size
@@ -1259,7 +1228,3 @@ def _is_digest(value: str) -> bool:
     return len(value) == 64 and all(
         character in "0123456789abcdef" for character in value
     )
-
-
-def _is_prefixed_digest(value: str) -> bool:
-    return value.startswith("sha256:") and _is_digest(value.removeprefix("sha256:"))

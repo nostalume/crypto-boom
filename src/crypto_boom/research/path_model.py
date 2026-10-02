@@ -134,21 +134,21 @@ def forecast_path(
         "evidence_status": "experimental"
         if symbol in metadata["symbols"]
         else "outside_training_symbols",
-        "assessment": "上下行空间、期末方向、路径效率分别解读; 不合成为交易分数。边际分位数不是联合概率。",
+        "assessment": "Interpret excursions, terminal direction and efficiency separately, not as a trading score. Marginal quantiles are not joint probabilities.",
         "model_sha256": metadata.get("model_sha256"),
     }
 
 
 def render_path_forecast(result: dict) -> str:
     names = {
-        "up": "上行最大幅度",
-        "down": "最大下跌幅度",
-        "terminal": "期末涨跌",
-        "efficiency": "有符号路径效率",
+        "up": "Maximum upside",
+        "down": "Maximum downside",
+        "terminal": "Terminal return",
+        "efficiency": "Signed path efficiency",
     }
     lines = [
-        f"{result['symbol']} | 未来 {result['horizon_minutes']} 分钟 | {result['evidence_status']}",
-        f"起点 UTC: {datetime.fromtimestamp(result['decision_us'] / 1_000_000, tz=UTC).isoformat()}",
+        f"{result['symbol']} | Horizon: {result['horizon_minutes']} minutes | {result['evidence_status']}",
+        f"Origin UTC: {datetime.fromtimestamp(result['decision_us'] / 1_000_000, tz=UTC).isoformat()}",
     ]
     for item in result["dimensions"]:
         name = item["target"].rsplit("_", 1)[0]
@@ -162,6 +162,6 @@ def render_path_forecast(result: dict) -> str:
         [
             *lines,
             result["assessment"],
-            "P90 是分布位置, 不是上涨成功率; 不含费用、滑点与可成交性。",
+            "P90 is a quantile, not a success probability; fees, slippage and executability are excluded.",
         ]
     )

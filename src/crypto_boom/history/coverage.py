@@ -102,7 +102,7 @@ class SymbolCoverage:
             raise HistoricalCoverageIntegrityError(
                 "coverage source lineage is incomplete"
             )
-        if any(not _is_digest(value) for value in self.source_manifest_ids):
+        if any(not _artifacts.is_sha256(value) for value in self.source_manifest_ids):
             raise HistoricalCoverageIntegrityError(
                 "coverage source identity is invalid"
             )
@@ -169,7 +169,9 @@ class HistoricalCoverageReport:
     def __post_init__(self) -> None:
         if self.schema_version != 1 or self.policy_version != COVERAGE_POLICY_VERSION:
             raise HistoricalCoverageIntegrityError("coverage version is invalid")
-        if not _is_digest(self.availability_report_id) or not _is_digest(self.pool_id):
+        if not _artifacts.is_sha256(
+            self.availability_report_id
+        ) or not _artifacts.is_sha256(self.pool_id):
             raise HistoricalCoverageIntegrityError(
                 "coverage source identity is invalid"
             )
@@ -499,12 +501,3 @@ def _parse_day(value: str) -> date:
     if parsed.isoformat() != value:
         raise HistoricalCoverageIntegrityError("coverage day is invalid")
     return parsed
-
-
-def _is_digest(value: str) -> bool:
-    raw = value.removeprefix("sha256:")
-    return (
-        value.startswith("sha256:")
-        and len(raw) == 64
-        and all(character in "0123456789abcdef" for character in raw)
-    )

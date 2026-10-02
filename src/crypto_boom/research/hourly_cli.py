@@ -4,8 +4,86 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
+
+
+def generate_prediction_report(
+    model_directory: Path,
+    output: Path,
+    *,
+    symbol: str | None = None,
+    bar_paths: list[Path] | None = None,
+    trusted: bool = False,
+) -> dict:
+    """Fresh directory only; single symbol, no silent network fallback in replay."""
+    from crypto_boom import _artifacts
+    from crypto_boom.bars import MINUTE_US, load_bar_files
+    from crypto_boom.research.hourly import forecast_hourly, load_hourly_model
+
+    if (symbol is None) == (not bar_paths):
+        raise ValueError("choose exactly one of live symbol or replay bar paths")
+    if output.exists():
+        raise FileExistsError(output)
+    model, metadata = load_hourly_model(model_directory, trusted=trusted)
+    server_ms = None
+    if symbol is not None:
+        from crypto_boom.latest_market import fetch_latest
+
+        source, server_ms = fetch_latest(symbol, minutes=1501)
+        if (
+            source["open_time"].dt.epoch("us")[-1] + MINUTE_US
+            != server_ms // 60000 * MINUTE_US
+        ):
+            raise ValueError("latest source is stale")
+        receipts = [{"source": "Binance public Spot minute endpoint"}]
+    else:
+        source, receipts = load_bar_files(bar_paths or [], start_us=0, end_us=2**63 - 1)
+    result = forecast_hourly(model, metadata, source)
+    if not re.fullmatch(r"[A-Z0-9]{3,32}", result["symbol"]):
+        raise ValueError("unsupported report symbol")
+    result.update(
+        mode="live_hourly" if symbol is not None else "historical_replay",
+        generated_at_utc=datetime.now(UTC).isoformat(),
+        server_ms=server_ms,
+        provenance=metadata["provenance"],
+        sources=receipts,
+    )
+    decision = datetime.fromtimestamp(
+        result["decision_us"] / 1_000_000, UTC
+    ).isoformat()
+    text = (
+        f"# {result['symbol']} experimental prediction report\n\n"
+        f"- Mode:{result['mode']}\n- Prediction origin (UTC):{decision}\n"
+        f"- Lag behind latest completed minute:{result['hour_lag_minutes']} minutes (preserving training-time hourly alignment)\n"
+        f"- Six-hour maximum upside P90:**{result['upside_p90']:.2%}**\n"
+        f"- Traded-minute fraction over 24 hours:{result['observed_fraction_24h']:.2%}\n"
+        f"- Model identity:`{result['model_sha256']}`\n\n"
+        "## Interpretation\n\n"
+        f"{result['interpretation']}\n\n"
+        "Origin price is the last minute close before the hour. All hourly buckets are complete; "
+        "this is not a new forecast for the current minute. Cross-symbol/time validity is not guaranteed.\n\n"
+        "Retention, downside and terminal return are not supplied and must not be treated as zero risk. "
+        "Experiments do not establish reliable sustained-rise identification. This is not an order or after-cost return forecast.\n\n"
+        f"Training provenance:`{metadata['provenance'].get('kind', 'unknown')}`;"
+        "new_fit_not_evaluated means an unevaluated fit. Historical replay is not live data.\n"
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with _artifacts.publication_staging_directory(
+        output.parent, prefix="report-"
+    ) as staging:
+        source.sort("open_time").tail(1501).write_parquet(staging / "source.parquet")
+        result["source_snapshot_sha256"] = _artifacts.file_identity(
+            staging / "source.parquet"
+        )[0]
+        (staging / "prediction.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+        (staging / "report.md").write_text(text, encoding="utf-8")
+        staging.rename(output)
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,8 +133,6 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "export-hourly":
         result = export_hourly_study(args.study, args.model, trusted=args.trust_model)
     elif args.command == "report":
-        from crypto_boom.research.prediction_report import generate_prediction_report
-
         result = generate_prediction_report(
             args.model,
             args.output,
@@ -80,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             outputs=[
                 {
                     "name": "upside_p90",
-                    "label": "最大上涨空间 P90",
+                    "label": "Maximum upside P90",
                     "horizon_minutes": 360,
                     "statistic": "quantile",
                     "quantile": 0.9,

@@ -21,22 +21,26 @@ def _utc_us(value: str) -> int:
 
 def render_text(result: dict) -> str:
     lines = [
-        f"{result['symbol']} | 起点 {result['origin_utc']} | 收盘价 {result['origin_close']:.8g}",
-        f"数据距起点 {result['origin_age_seconds']:.1f} 秒;模型状态:实验性、未经前瞻验证",
-        "预测对象:从起点开始,未来窗口内的最大分钟收盘涨幅(不是期末收益)",
+        f"{result['symbol']} | Origin {result['origin_utc']} | Close {result['origin_close']:.8g}",
+        f"Origin age: {result['origin_age_seconds']:.1f} seconds; model is experimental, not forward-validated",
+        "Target: maximum minute-close upside from the origin over the horizon, not terminal return",
     ]
     for entry in result["forecasts"]:
         lines.append(
-            f"  {entry['horizon_minutes'] / 60:g} 小时 / "
-            f"P{entry['quantile'] * 100:g} 分位估计:"
+            f"  {entry['horizon_minutes'] / 60:g} hours / "
+            f"P{entry['quantile'] * 100:g} quantile estimate:"
             f"+{entry['max_close_rise_fraction'] * 100:.2f}%"
         )
     lines += [
-        "分位数不是达到涨幅的概率;例如 P90 不是“有 90% 概率上涨这么多”。",
-        "历史验证集总体各输出均优于简单基线:"
-        + ("是(仍不代表未来有效)" if result["all_coordinates_beat_baseline"] else "否"),
+        "Quantiles are not hit probabilities: P90 does not mean a 90% chance of that rise.",
+        "All outputs beat simple baselines on historical validation: "
+        + (
+            "yes (not proof of future validity)"
+            if result["all_coordinates_beat_baseline"]
+            else "no"
+        ),
         result["warning"],
-        f"模型 SHA256:{result['model_sha256']}",
+        f"Model SHA256:{result['model_sha256']}",
     ]
     return "\n".join(lines)
 

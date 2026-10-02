@@ -44,7 +44,7 @@ def bundle(tmp_path, recipe=RECIPE, cadence=60):
         outputs=[
             {
                 "name": "up",
-                "label": "Upside",
+                "label": "\u6700\u5927\u4e0a\u6da8\u7a7a\u95f4 P90",
                 "horizon_minutes": 360,
                 "unit": "return_fraction",
                 "statistic": "quantile",
@@ -92,7 +92,10 @@ def test_extracted_recipe_exact_parity():
 
 
 @pytest.mark.parametrize("mode", ["complete", "data_error", "rate_stop", "timeout"])
-def test_full_scope_common_clock_and_partial_ledger(tmp_path, monkeypatch, mode):
+def test_full_scope_common_clock_and_partial_ledger(
+    tmp_path, monkeypatch, mode, caplog
+):
+    caplog.set_level("INFO", logger="crypto_boom.market_scan")
     bundle(tmp_path)
     members = ["AAAUSDT", "BBBUSDT", "CCCUSDT"]
     decisions = []
@@ -142,6 +145,10 @@ def test_full_scope_common_clock_and_partial_ledger(tmp_path, monkeypatch, mode)
     monkeypatch.setattr(SpotSnapshotClient, "universe", universe)
     monkeypatch.setattr(SpotSnapshotClient, "bars", fetch)
     result = asyncio.run(scan_market(ProjectSettings(tmp_path, workers=1)))
+    assert "Universe acquired: 3 members" in caplog.text
+    assert "Product metadata is partial" in caplog.text
+    assert "Report published:" in caplog.text
+    assert f"Scan {result['status']}:" in caplog.text
     assert result["eligible_symbols"] == 3 and len(result["rows"]) == 3
     assert set(decisions) == {BASE + 1500 * MINUTE_US}
     assert (result["status"] == "complete") == (mode == "complete")
@@ -153,6 +160,9 @@ def test_full_scope_common_clock_and_partial_ledger(tmp_path, monkeypatch, mode)
         assert result["counts"]["success"] == 2
     report = __import__("pathlib").Path(result["report_directory"])
     assert (report / "predictions.csv").is_file() and (report / "report.md").is_file()
+    prose = (report / "report.md").read_text(encoding="utf-8")
+    assert prose.isascii() and "Market-wide prediction report" in prose
+    assert result["model_contract"]["outputs"][0]["label"].startswith("\u6700")
     assert result["schema"] == "market-scan-v2"
     assert result["product_metadata_status"] == "partial"
     assert (
@@ -326,3 +336,247 @@ def test_observed_universe_and_metadata_refusals(monkeypatch, mode):
                 assert clock == 123456789
 
     asyncio.run(execute())
+
+
+@pytest.mark.parametrize("mutate", [False, True])
+def test_optional_input_evidence_preserves_values_and_single_compute(
+    tmp_path, monkeypatch, mutate
+):
+    from crypto_boom import model_runtime
+
+    bundle(tmp_path)
+    models, manifest, _ = load_active_model(tmp_path / "models")
+    source = bars(1500)
+    calls = 0
+    original = model_runtime.sequence_matrix
+
+    def matrix(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    monkeypatch.setattr(model_runtime, "sequence_matrix", matrix)
+    if mutate:
+
+        class MutatingEstimator:
+            n_features_in_ = RECIPE.feature_count
+
+            def predict(self, values):
+                values[0, 0] += 1
+                return np.array([0.1])
+
+        models = {"up": MutatingEstimator()}
+    normal = predict_bars(models, manifest, source, decision_us=BASE + 1500 * MINUTE_US)
+    captured = predict_bars(
+        models,
+        manifest,
+        source,
+        decision_us=BASE + 1500 * MINUTE_US,
+        include_inputs=True,
+    )
+    assert calls == 2
+    assert captured["values"] == normal
+    if mutate:
+        assert captured["inputs"]["state"] == "unavailable"
+        assert captured["inputs"]["vector"] is None
+    else:
+        vector = captured["inputs"]["vector"]
+        assert vector.dtype == np.float32 and vector.shape == (RECIPE.feature_count,)
+        assert not vector.flags.writeable
+        np.testing.assert_array_equal(
+            vector,
+            original(
+                source,
+                pl.DataFrame(
+                    {"symbol": ["AAAUSDT"], "decision_us": [BASE + 1500 * MINUTE_US]}
+                ),
+                RECIPE,
+            )[0],
+        )
+
+
+@pytest.mark.parametrize("mode", ["complete", "write_failure", "budget", "cancel"])
+def test_scan_input_publication_is_independent(tmp_path, monkeypatch, mode):
+    import pyarrow.parquet as pq
+
+    from crypto_boom import _artifacts, market_scan
+
+    bundle(tmp_path)
+    source = bars(1500)
+
+    async def universe(self):
+        return (
+            ["AAAUSDT", "BBBUSDT"],
+            {"scope": "fixture", "metadata_refusals": []},
+            b"{}",
+            (BASE + 1500 * MINUTE_US) // 1000,
+        )
+
+    async def fetch(self, symbol, **kwargs):
+        return source.with_columns(pl.lit(symbol).alias("symbol")), {
+            "cache_id": "a" * 64,
+            "source_sha256": "sha256:" + "b" * 64,
+            "reused": True,
+        }
+
+    async def pool(*args, **kwargs):
+        return {
+            "status": "complete",
+            "http_requests": 0,
+            "sources": {"binance_spot": {"state": "success"}},
+            "products": [],
+        }
+
+    monkeypatch.setattr(SpotSnapshotClient, "universe", universe)
+    monkeypatch.setattr(SpotSnapshotClient, "bars", fetch)
+    monkeypatch.setattr(market_scan, "collect_product_pool", pool)
+    if mode in {"write_failure", "cancel"}:
+
+        def fail(table, path, **kwargs):
+            path.write_bytes(b"partial")
+            if mode == "cancel":
+                raise KeyboardInterrupt
+            raise OSError("disk failure")
+
+        monkeypatch.setattr(pq, "write_table", fail)
+    if mode == "budget":
+        monkeypatch.setattr(market_scan, "MAX_INPUT_BYTES", RECIPE.feature_count * 4)
+    if mode == "cancel":
+        with pytest.raises(KeyboardInterrupt):
+            asyncio.run(scan_market(ProjectSettings(tmp_path), record_inputs=True))
+        assert not list((tmp_path / "reports").iterdir())
+        return
+    result = asyncio.run(scan_market(ProjectSettings(tmp_path), record_inputs=True))
+    assert result["status"] == "complete" and result["counts"] == {"success": 2}
+    assert result["schema"] == "market-scan-v3"
+    from pathlib import Path
+
+    directory = Path(result["report_directory"])
+    evidence = result["input_evidence"]
+    assert (
+        evidence["state"]
+        == {
+            "complete": "complete",
+            "write_failure": "unavailable",
+            "budget": "partial",
+        }[mode]
+    )
+    if mode == "write_failure":
+        assert not (directory / "inputs.parquet").exists()
+        assert all(
+            r["input_evidence"]["reason"] == "publication_failed"
+            for r in result["rows"]
+        )
+    else:
+        table = pq.read_table(directory / "inputs.parquet")
+        assert len(table) == evidence["rows"] == (1 if mode == "budget" else 2)
+        assert (
+            evidence["sha256"]
+            == _artifacts.file_identity(directory / "inputs.parquet")[0]
+        )
+        assert table["features"].type.list_size == RECIPE.feature_count
+    assert (
+        json.loads((directory / "report.json").read_text(encoding="utf-8"))[
+            "input_evidence"
+        ]
+        == evidence
+    )
+    assert not list((tmp_path / "reports").glob("scan-*"))
+
+
+def test_scan_cli_explicit_input_recording(tmp_path, monkeypatch, capsys):
+    from crypto_boom import cli, market_scan
+
+    config = tmp_path / "crypto-boom.toml"
+    config.write_text('[data]\nroot="data"\n')
+
+    async def scan(settings, *, record_inputs=False):
+        assert record_inputs is True
+        return {
+            "status": "complete",
+            "model_id": "fixture",
+            "eligible_symbols": 0,
+            "product_metadata_status": "complete",
+            "counts": {},
+            "report_directory": str(tmp_path),
+            "input_evidence": {"state": "unavailable"},
+        }
+
+    monkeypatch.setattr(market_scan, "scan_market", scan)
+    assert cli.main(["scan", "--record-inputs", "--config", str(config)]) == 0
+    assert (
+        json.loads(capsys.readouterr().out)["input_evidence"]["state"] == "unavailable"
+    )
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_snapshot_concurrent_publication_verifies_winner(
+    tmp_path, monkeypatch, conflict
+):
+    import os
+    import shutil
+
+    from crypto_boom import _artifacts
+
+    async def get(self, path, params, **kwargs):
+        return json.dumps(
+            [
+                [
+                    params["startTime"] + i * 60000,
+                    "10",
+                    "11",
+                    "9",
+                    "10",
+                    "2",
+                    params["startTime"] + i * 60000 + 59999,
+                    "20",
+                    2,
+                    "1",
+                    "10",
+                    "0",
+                ]
+                for i in range(params["limit"])
+            ]
+        ).encode()
+
+    def race(source, target):
+        shutil.copytree(source, target)
+        if conflict:
+            (target / "bars.parquet").write_bytes(b"conflicting winner")
+        raise FileExistsError("competing publisher won")
+
+    monkeypatch.setattr(SpotSnapshotClient, "get", get)
+    monkeypatch.setattr(os, "replace", race)
+
+    async def execute():
+        async with aiohttp.ClientSession() as session:
+            client = SpotSnapshotClient(session)
+            if conflict:
+                with pytest.raises(ValueError, match="concurrent source cache"):
+                    await client.bars(
+                        "AAAUSDT",
+                        decision_us=BASE + 10 * MINUTE_US,
+                        history_minutes=1,
+                        cache=tmp_path,
+                    )
+            else:
+                frame, receipt = await client.bars(
+                    "AAAUSDT",
+                    decision_us=BASE + 10 * MINUTE_US,
+                    history_minutes=1,
+                    cache=tmp_path,
+                )
+                assert receipt["reused"] and len(frame) == 2
+                assert (
+                    _artifacts.file_identity(
+                        tmp_path / receipt["cache_id"] / "bars.parquet"
+                    )[0]
+                    == receipt["source_sha256"]
+                )
+
+    asyncio.run(execute())
+    assert not list(tmp_path.glob("snapshot-*"))
+    if conflict:
+        assert (
+            next(tmp_path.glob("*/bars.parquet")).read_bytes() == b"conflicting winner"
+        )

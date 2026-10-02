@@ -245,5 +245,5 @@ def forecast(
             for i, h in enumerate(grid.horizons)
             for j, q in enumerate(grid.quantiles)
         ],
-        "warning": "实验性分位数估计,不是达到涨幅的概率、期末收益或收益保证;未预测下跌风险。",
+        "warning": "Experimental quantiles, not hit probabilities, terminal returns or guaranteed returns; downside is not predicted.",
     }

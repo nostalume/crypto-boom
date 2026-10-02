@@ -201,6 +201,14 @@ def test_rest_two_pages_exact_closed_history(monkeypatch):
     calls, clock = mock_rest(monkeypatch)
     source, final_clock = latest_market.fetch_latest("AAAUSDT", minutes=1441)
     assert len(source) == 1441
+    assert (
+        source["open_time"].dt.epoch("ms")[0]
+        == clock // 60_000 * 60_000 - 1441 * 60_000
+    )
+    assert source["close_price"].to_list() == [10.0] * 1441
+    assert source["quote_turnover"].to_list() == [10000.0] * 1441
+    assert source["taker_buy_quote_turnover"].to_list() == [5000.0] * 1441
+    assert source["trade_count"].to_list() == [10.0] * 1441
     assert final_clock == clock
     assert len(calls) == 4
     assert calls[1][1]["limit"] == 1000 and calls[2][1]["limit"] == 441
@@ -213,6 +221,10 @@ def test_rest_two_pages_exact_closed_history(monkeypatch):
         lambda rows: rows.pop(),
         lambda rows: rows[0].__setitem__(0, rows[1][0]),
         lambda rows: rows[0].__setitem__(6, 0),
+        lambda rows: rows[0].__setitem__(8, True),
+        lambda rows: rows[0].__setitem__(0, str(rows[0][0])),
+        lambda rows: rows[0].pop(),
+        lambda rows: rows[0].__setitem__(4, "invalid"),
     ],
 )
 def test_rest_refuses_missing_duplicate_or_unfinished(monkeypatch, mutation):

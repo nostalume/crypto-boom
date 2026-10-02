@@ -532,7 +532,7 @@ def test_failed_atomic_replace_leaves_no_authoritative_partition(
     def fail_replace(source: Path, target: Path) -> None:
         raise OSError("simulated publication interruption")
 
-    monkeypatch.setattr(daily.os, "replace", fail_replace)
+    monkeypatch.setattr(daily._artifacts.os, "replace", fail_replace)
 
     async def acquire(base_url: str) -> daily.PublishedArchive:
         return await acquire_archive_day(
